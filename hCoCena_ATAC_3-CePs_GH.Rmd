@@ -1,0 +1,610 @@
+---
+title: "hCoCena_ATAC_3-CePs"
+author: "Caterina Carraro"
+date: "080822"
+output: 
+ html_document:
+  toc: TRUE
+  toc_float: true
+editor_options: 
+  chunk_output_type: inline
+---
+
+# Load environment
+
+```{r}
+load("/home/caterina/data/hCoCena/h_working_directory/hCoCena_ATAC_3-CePs_GH.RData")
+```
+
+# Pre-Integration Phase
+
+## Setting up the working directory
+
+### working directory
+
+String that defines the path to the folder from which you are working. The folder should have the following
+structure in order for the script to extract the necessary files correctly:
+    
+      working_directory/  
+    
+                  scripts/ (All hCoCenaÂ² scripts)  
+                  data/ (count table(s))  
+                  reference_files/ (gmt files, TFcat file, etc.)  
+                  sample_info/ (metadata file(s)) 
+  
+```{r setting your working directory}
+# working_directory <- "/home/caterina/data/hCoCena/h_working_directory/"
+```
+
+### Save folder
+
+Please define a folder in which your results shall be saved using the 'name' variable. 
+The folder is created automatically, if it does not yet exist in your working directory.
+  
+```{r, warning = FALSE}
+# source(paste0(working_directory,"scripts/", "init_envo.R"))
+# 
+# global_settings <- list()
+# global_settings[["save_folder"]] <- init_save_folder(name = "output_showcase_3")
+```
+
+## Defining Your Omics Layers:
+
+### information on required file structures:
+
+  + **count files**
+  
+The count files must be found in the *data* folder.
+The count file must be organised such that rows represent genes and columns represent samples. 
+Each count file should contain a uniformly named column that contains the gene names. 
+Further non-numeric columns present in the file will be removed automatically. 
+Please make sure that there are no numeric columns other than those holding the counts for the samples.
+      
+  + **info datasets**
+  
+The annotation files must be found in the **sample_info** folder.
+The structure of the annotation file is required to be one line per sample and each columnrepresents a specific type of information (e.g. age, sex, condition, â¦). 
+One column should contain the sample names and these must match the column names of the corresponding count file. 
+The naming of this column has to be uniform throughout all annotation files.
+                  
+### Setting the layers:
+
+  + **using data saved as files**
+
+The variable layers is set to be a list. The slot names of this list must be consecutively named set1, set2, set3, etc. such that there is one slot per dataset. 
+The naming will allow automatic access of the data by upcoming functions and is thus mandatory for the scripts to run accurately. 
+Each slot is set to be a vector of character strings with exactly two entries, the first one being the name of the count file associated with this layer, 
+including the file ending, the second entry is the name of the annotation file. Standard file formats such as .txt and .csv are supported.
+
+  + **using data from the environment**
+  
+Alternatively, if the count and annotation tables are already present in the environment, the layers can be initialized from those, thus saving them as files is not required.
+In this case, just give the object names as strings instead of the file names. The count object must be a data frame with sample names as columns and gene names as rows. 
+There must be no additional columns other than those representing the counts per sample. 
+The annotation object must also be a data frame, where row names are sample names that match the column names of the count object, and column names are information categories.
+
+  + **supplementary data**:
+  
+The variable supplement is an ordered character vector comprising five entries:
+I. The name of the transcription factor file, where column name should be the species (human or mouse) and the entries should be gene names.
+II. The name of the Hallmark enrichment file (.gmt).
+III. The name of the Gene Ontology enrichment file (.gmt).
+IV. The name of the KEGG enrichment file (.gmt).
+V. The name of the Reactome enrichment file (.gmt).
+The .gmt files can be downloaded from https://www.gseamsigdb.org/gsea/msigdb/collections.jsp. 
+All files must be stored in the reference_files folder.
+  
+  + **names of layers**:
+
+The last variable to be set in this step is layers_names, a character vector containing descriptive names for the datasets in the order in which they have been defined in layers. The names set here will be used for plot titles, the naming of output files et cetera. 
+The names must be unique.
+    
+##Define RNA uDEG for filtering
+
+```{r}
+# #Topvar 1000, protein coding
+# RNA_uDEG <- readRDS("/home/caterina/data/hCoCena/h_working_directory/data/RNA_uDEG_topK.rds")
+# RNA_uDEG <- as.data.frame(RNA_uDEG)
+# colnames(RNA_uDEG)[1] <- "SYMBOL"
+```
+
+##Define ATAC uDEG for filtering
+
+```{r}
+# #Topvar 1000, protein coding in promoters
+# ATAC_uDEG <- readRDS("/home/caterina/data/hCoCena/h_working_directory/data/ATAC_uDEG_topK.rds")
+# ATAC_uDEG <- as.data.frame(ATAC_uDEG)
+# colnames(ATAC_uDEG)[1] <- "SYMBOL"
+```
+
+###Set union of ATAC and RNA DE genes (coding)
+
+```{r}
+# input_DEGs <- unique(rbind(RNA_uDEG, ATAC_uDEG, by = "SYMBOL"))
+# input_DEGs$SYMBOL <- paste(input_DEGs$SYMBOL, "_A")
+```
+
+###Define layers
+
+```{r defining Omics Layers}
+# ###create 2 layers ( HCT15 ATAC and BxPC3 ATAC)
+# library("genefilter")
+# library("dplyr")
+# library("tidyr")
+# 
+# anno_A <- read.delim(paste("/home/caterina/data/hCoCena/h_working_directory/sample_info/anno_A.txt"),header=TRUE, stringsAsFactors = TRUE)
+# anno_A$Group <- as.character(anno_A$Group)
+# anno_A$Group[anno_A$Group == "BxPC3_THCG20_12h"] <- "B_T_12_RNA"
+# anno_A$Group[anno_A$Group == "BxPC3_AF2_12h"] <- "B_A_12_RNA"
+# anno_A$Group[anno_A$Group == "BxPC3_THCG20_6h"] <- "B_T_6_RNA"
+# anno_A$Group[anno_A$Group == "BxPC3_AF2_6h"] <- "B_A_6_RNA"
+# anno_A$Group[anno_A$Group == "HCT15_THCG20_12h"] <- "H_T_12_RNA"
+# anno_A$Group[anno_A$Group == "HCT15_AF2_12h"] <- "H_A_12_RNA"
+# anno_A$Group[anno_A$Group == "HCT15_THCG20_6h"] <- "H_T_6_RNA"
+# anno_A$Group[anno_A$Group == "HCT15_AF2_6h"] <- "H_A_6_RNA"
+# anno_A$Group[anno_A$Group == "BxPC3_DMSO_0h"] <- "B_C_RNA"
+# anno_A$Group[anno_A$Group == "HCT15_DMSO_0h"] <- "H_C_RNA"
+# colnames(anno_A)[1] <- "Sample"
+# anno_A$ID <- paste("Sample_",anno_A$Sample,sep="")
+# rownames(anno_A) <- anno_A$ID
+# anno_BxPC3_A <- anno_A[c(1:6, 13:15, 19:24),]
+# anno_HCT15_A <- anno_A[c(7:12, 16:18, 25:30),]
+#   
+# counts_A <- read.csv("/home/caterina/data/hCoCena/h_working_directory/data/ATAC_normanno_vst.csv")
+# counts_A <- subset(counts_A, counts_A$type == "protein_coding")
+# counts_A$symbol <- paste(counts_A$symbol, "_A")
+# counts_A <- subset(counts_A, counts_A$symbol%in%input_DEGs$SYMBOL) # subset for input uDEG
+# counts_A <- subset(counts_A, counts_A$annotation %in% c("Promoter (<=1kb)", "Promoter (1-2kb)", "Promoter (2-3kb)")) #take only peaks in promoter regions
+# counts_A <- counts_A[,c(2:31, 44)]
+# 
+# counts_BxPC3_A <- counts_A[, c(1:6, 13:15, 19:24, 31)]
+# counts_HCT15_A <- counts_A[, c(7:12, 16:18, 25:30, 31)]
+# 
+# counts_BxPC3_A$var <- rowVars(counts_BxPC3_A[ ,1:15])
+# counts_BxPC3_A <- arrange(counts_BxPC3_A, desc(var))
+# counts_BxPC3_A <- counts_BxPC3_A[ !duplicated(counts_BxPC3_A$symbol), ]
+# counts_BxPC3_A <- drop_na(counts_BxPC3_A)           
+# rownames(counts_BxPC3_A) <- counts_BxPC3_A$symbol
+# counts_BxPC3_A$symbol <- NULL
+# counts_BxPC3_A$var <- NULL
+# counts_BxPC3_A <- data.frame(counts_BxPC3_A)
+# 
+# counts_HCT15_A$var <- rowVars(counts_HCT15_A[ ,1:15])
+# counts_HCT15_A <- arrange(counts_HCT15_A, desc(var))
+# counts_HCT15_A <- counts_HCT15_A[ !duplicated(counts_HCT15_A$symbol), ]
+# counts_HCT15_A <- drop_na(counts_HCT15_A)
+# rownames(counts_HCT15_A) <- counts_HCT15_A$symbol
+# counts_HCT15_A$symbol <- NULL
+# counts_HCT15_A$var <- NULL
+# counts_HCT15_A <- data.frame(counts_HCT15_A)
+# 
+# layers <- list(set1 = c("counts_BxPC3_A", "anno_BxPC3_A"),
+#               set2 = c("counts_HCT15_A", "anno_HCT15_A"))
+# 
+# supplement <- c("TFcat.txt", "h.all.v6.1.symbols.gmt", "c5.bp.v7.0.symbols.gmt", 
+#              "c2.cp.kegg.v7.0.symbols.gmt", "c2.cp.reactome.v7.0.symbols.gmt")
+# 
+# layers_names <- c("BxPC3_A", "HCT15_A") 
+# 
+# layer_specific_outputs <- list()
+```
+
+## Package Installation
+
+In this step, all R packages required to run all steps of the analysis are installed. 
+The process is divided into the installation of CRAN packages followed by the installation of Bioconductor packages. 
+For both steps, the responsible function contains a parameter named install. 
+If this parameter is set to TRUE, the respective packages are installed, if set to FALSE, they are not. 
+Thus, if the script has been used before, the parameter should be set to FALSE to avoid re-installation at every run.
+  
+```{r install required packages}
+# source(paste0(working_directory,"scripts/", "install_packages.R"))
+# source(paste0(working_directory,"scripts/", "install_bioconductor_packages.R"))
+# 
+# install_cran_packages(install = F)
+# install_bioconductor_packages(install = F)
+```
+
+## Package loading
+
+After installation, this command loads all required libraries into the environment. 
+This step is required every time an analysis is run.
+
+```{r load packages, message = FALSE}
+# source(paste0(working_directory,"scripts/", "load_libraries.R"))
+```
+
+## Define global settings:
+
+These settings are all layer independent.
+
+### organism 
+
+"mouse" and "human" are supported so far.
+  
+### control
+  
+If you analyse only one data set, a control is not necessarily needed. 
+In this case, all comparisons between the present condiotins will be made relative to each other. 
+If you do in fact have only one dataset and no control, please set this parameter to "none".
+  
+If you want to analyse more than one data set, each data set **must** have its own control to allow correction for differing sequencing depths. 
+This control should be named **uniformly** throughout all annotation files. 
+In this case, please set this parameter to your control naming (e.g. "control" or "healthy"). 
+It is not necessary that the naming only consist of this term, it only needs to contain it, the script is also not case sensitive in this regard. 
+The uniform naming allows the tool to access the controls automatically for downstream fold change calculations, automated control-group definition in case of regrouping etc.
+  
+### voi
+
+Variable of interest, which is the name of the column that must be present in all annotation files and which is to be used to group the data (e.g. âconditionâ).
+  
+### min_nodes_number_for_network
+
+The minimum number of nodes in the subsequently created network that can define a graph component. Graph components with less nodes will be discarded.
+  
+### min_nodes_number_for_cluster
+
+The minimum number of nodes to be considered their own modules when detecting community structures in the network. 
+  
+### range_GFC
+
+The GFC range that determines the maximum value the group fold changes can acquire, all values above this value or beneath its negative will be truncated. 
+A typical value is 2. In the presence of controls, the GFC is the mean expression fold change of each group within **voi** from the mean expression in the control. 
+In the absence of controls, the GFC will be the mean expression fold change of each group in **voi** from the mean of all mean expression across all groups in **voi**.
+  
+### layout_algorithm
+
+The layout algorithm used for the network. You have the choice between layout_with_fr, which uses the force directed Fruchtermann-Rheingold-LayoutAlgorithm, in which edges are modelled as springs, with edge weights being the spring constants, and cytoscape, in which case the layout is modelled using the force-directed layout option from the Cytoscape software. 
+Cytoscape must be open in order for R to successfully build the connection.
+  
+### data_in_log
+
+A boolean whether or not your data has been logged to the base of 2.
+
+```{r global settings}
+global_settings[["organism"]] <- "human"
+
+global_settings[["control"]] <- "none"
+
+global_settings[["voi"]] <- "Group"
+
+global_settings[["min_nodes_number_for_network"]] <- 15
+
+global_settings[["min_nodes_number_for_cluster"]] <- 15
+
+global_settings[["range_GFC"]] <- 2.0
+
+global_settings[["layout_algorithm"]] <- "layout_with_fr" #"layout_with_fr" #"cytoscape"
+
+global_settings[["data_in_log"]] <- T
+```
+
+## Define layer-specific settings:
+
+This category comprises all parameters that can be pre-set for each data layer individually. 
+
+### top_var
+
+This defines for each dataset the number of top most variable genes to be extracted. 
+This can be either set to a numeric vector of the same number for each layer or of differing numbers. 
+For this and all other layer-specific parameters applies that the order of these vector entries is in accordance to the order in which the data layers have originally been defined. 
+Alternatively, top_var can be set to âallâ in which case all genes from each dataset are considered. 
+High values of this parameter can later on lead to very long runtimes and large memory allocation when calculating pair-wise correlations. 
+The performance strongly depends on the number of datasets and the number of samples they include. 
+A typical value for a 16 GB RAM machine is top_var = 5,000, for larger values or very large and many datasets this might have to be adjusted. 
+R will throw a memory allocation error in that case. 
+In case of a small number of datasets (2 or 3) with only a few hundred samples, top_var = 10,000 is also feasible.
+  
+### min_corr and range_cutoff_length
+
+To construct a meaningful co-expression network for each layer, correlation cut-offs must be determined for every dataset
+that mark the lower boundary for the correlation of two genes in order for their co-expression to be represented as an edge in the network. 
+To facilitate choosing these cut-offs, a series of parameters will be calculated for a defined number of different cut-offs. 
+The number of cut-offs for which these parameters are calculated is determined by range_cutoff_length. 
+The range from which these possible cut-offs are taken is on the lower end restricted by min_corr and on the upper end by the maximum correlation calculated between any two genes in the dataset. min_corr should not be set to a value lower than 0.5. 
+For bulk-RNA sequencing, min_corr = 0.7 and range_cutoff_length = 100 have provided an adequate number of values to choose from. 
+The higher the value for range_cutoff_length is chosen, the higher the resolution but it also impedes the selection process.
+
+### print_distribution_plots
+
+Boolean. Whether or not to print the distribution plots for all tested cut-offs to pdf files. 
+The number of plots per data set will be equal to the **range_cutoff_length** parameter you have set.
+Given the size, this should only be set to TRUE, if range_cutoff_length is small or if one wishes to thoroughly analyse how 
+the degree distribution changes in detail for differing cut-offs.
+
+```{r layer-specific settings}
+source(paste0(working_directory,"scripts/", "set_layer_settings.R"))
+
+#SET TOP_VAR EQUAL NUMBER OF ENTRIES
+
+layer_settings <- list()
+
+layer_settings <- set_layer_settings(top_var = rep(1600, length(layers)), 
+                                     min_corr = rep(0.5, length(layers)), 
+                                     range_cutoff_length = rep(100, length(layers)),
+                                     print_distribution_plots = rep(F, length(layers))) 
+```
+
+## Data import
+
+If the working directory and the folders it is supposed to contain have been set up correctly, 
+all count and annotation files will be loaded and structured into the data object automatically. 
+To allow correct reading of the data, the separator found in all count files â *sep_counts* â and that found in all annotation files â *sep_anno* â must be set accordingly. 
+The parameters *gene_symbol_col* and *sample_col* define the name of the columns containing the gene symbols in the count files and the sample names in the annotation files, respectively. 
+*count_has_rn* and *anno_has_rn* both accept Boolean values indicating whether or not the count or annotation files include row names.
+
+### sep_counts 
+Delimiter used in the count files.
+  
+### sep_anno 
+Delimiter used in the annotation files.
+  
+### gene_symbol_col
+The name of the column in your count files that contains the gene symbols.
+  
+### sample_col
+The name of the column in your annotation files that contains the sample names.
+  
+### count_has_rn
+Boolean whether or not your count file has rownames.
+  
+### anno_has_rn
+Boolean whether or not your annotation files have rownames.
+
+```{r data import}
+source(paste0(working_directory,"scripts/", "init_envo.R"))
+
+#One function to rule them all, One function to find them, One function to bring them all, and in the darkness bind them:
+data <- initialize_environment(sep_counts = "\t",
+                       sep_anno = "\t", 
+                       gene_symbol_col = rownames(),
+                       sample_col = "ID",
+                       count_has_rn = T,
+                       anno_has_rn = T)
+
+supplementary_data <- load_supplementary_data()
+```
+
+## Checking data distribution:
+
+To get a better feeling for the datasets and to detect possible outliers or prominent differences within datasets, 
+the distribution of count values across all samples per dataset can be visualized either as boxplots or frequency distributions, by setting the plot_type parameter to âboxplotâ or âfreqdistâ, respectively. 
+Within the defined save folder, a folder named âsample_distribution_plotsâ will be created to which these plots will be saved.
+
+```{r data distribution plots, warning = FALSE}
+source(paste0(working_directory,"scripts/", "plot_data_distribution.R"))
+
+plot_sample_distributions(data_df = data, 
+                          plot_type = "boxplot",
+                          log_2 = T, 
+                          plot = T)
+```
+
+## Data processing part I:
+
+After setting global and layer-specific variables as well as reading and inspecting the datasets, the data processing starts. 
+This first part leads up to choosing the correlation cutoff for each layer. 
+All datasets will be filtered for their *most variant genes* as defined in the layer-specific settings. 
+After this filtering step, the *pair-wise Pearson correlation coefficients* for all pairs of genes are calculated. 
+Correlations that are negative or that have an associated p-value higher than 0.05 are immediately discarded. 
+From a computational perspective, this has the potential to be the most demanding step in the workflow, depending on the size of the datasets. 
+It scales quadratically to the number of genes and therefore represents a bottleneck. 
+Next, a set of statistics will be calculated for the set range of cut-off values that aim to facilitate the cut-off choice. 
+This includes determining the number of graph components resulting from creating a network when cutting the data with the respective cut-off, as well as the number of nodes and edges this network comprises. 
+The last parameter that is evaluated is the RÂ²-value of the data to a linear regression through the logged degree distribution for the given network. 
+Many biological networks are believed to have a scale-free topology (Broido, 2019), meaning that their degree distribution asymptotically follows a power law. 
+Thus, there are expected to be a high number of nodes with a low degree and a small number of nodes with a high degree. 
+The goodness of a cut-off can accordingly be partially judged by how well it preserves this graph property.
+However, it has also been shown, that biological networks often follow a scale-free topology for lower degrees, 
+but the tail has been observed to diverge from the linear regression (Broido, 2019). 
+When choosing the cut-off, one should try to maintain a similar number of nodes and edges throughout the datasets. 
+This prevents either one of the networks to superimpose the information held within the others.
+All outputs generated by the different steps will be saved in the global variable layer_specific_outputs. 
+
+```{r expression analysis up to cutoff}
+source(paste0(working_directory,"scripts/", "exp_script.R"))
+
+run_expression_analysis_1()
+```
+
+## Data processing part II:
+
+### Inspecting different cut-offs
+
+The second part of the analysis comprises choosing a minimal correlation cutoff based on which the gene-co-expression network is constructed. 
+Gene pairs are only considered as co-expressed if their correlation exceeds the chosen cutoff. 
+Their co-expression is then represented by an edge in the subsequent network. 
+To aid the cutoff selection, the most important stats for each cutoff are represented as a plot and listed in detail in the data frame *cutoff_stats_concise*, found in *layer_specific_outputs* for each set under *part1\$opt_cut_out\$cutoff_stats_concise*. 
+Displayed are the R.squared value representing how strongly the scale-free topology is maintained in the resulting network, 
+the number of edges and the number of nodes in the resulting network and the number of graph components. 
+For better guidance and comparability, the user can set a threshold value for each parameter, 
+introducing a horizontal line in the respective panel at that value. This alleviates the comparison of cut-offs among datasets. 
+If no threshold line is desired, the respective parameter should be set to NULL.
+
+```{r fig.height = 8, fig.width = 15}
+source(paste0(working_directory,"scripts/cutoff_plot.R"))
+
+plot_cutoffs(hline = list("R.squared" = 0.75, "no_edges" = NULL, "no_nodes" = 2000, 
+                             "no_networks" = NULL))
+```
+### Choosing the cut-offs
+
+Subsequently, the cut-offs are set and saved in cutoff_vec. 
+The order in which the cutoffs are defined must correspond to the order in which the layers have previously been specified.
+
+```{r choose cutoff}
+cutoff_vec <- c(0.693, 0.707)
+```
+
+### Checking the scale-free topology
+
+For each dataset, the logged degree distribution and the linear regression are plotted to visualise the preservation of the scale-free topology criterion
+
+```{r plot degree distribution for chosen cutoff, message = F, warning = F}
+plot_deg_dist(cut_off_vec = cutoff_vec)
+```
+
+### Heatmap of top most variant genes and GFC calculation
+
+To finalize these integration-preceding processing steps, a co-expression network is constructed for each layer, 
+where the vertices represent genes and the edges represent correlations between two genes that are at least as high as the defined cut-off. 
+Thus, a gene is included in the network if it passed the previous filtering steps for most variant genes as well as if it has a correlation strength that is as high as the cut-off or higher with at least one other gene. 
+The weight of an edge is representative of the correlation value that the edge represents, with high correlations resulting in short edges and low correlation resulting in longer edges. 
+Also, a heatmap is plotted for each layer, visualizing the expression values of the genes present in the layer-specific networks. 
+Hierarchical clustering is performed on the rows (genes) as well as on the columns (samples) defining the order in which they appear. 
+This not only provides a first overview on co-expressed groups but it also allows to see whether or not the used variable of interest (voi) suffices to explain the data. 
+If the hierarchical clustering of the samples greatly diverges from voi, a regrouping that will be offered in the upcoming steps should be considered. 
+Annotating the columns with the groups contained in voi is the default behaviour. 
+If you wish to annotate another information, set the function parameter grouping_v to the corresponding column name from the annotation. 
+This column must exist in all annotation files. 
+The plot_HM parameter accepts a Boolean stating if the created heatmap should be plotted and saved (TRUE) or only saved (FALSE). 
+For very large dimensions of the count table(s), this should be set to FALSE to prevent R studio to encounter a fatal error and abort the session.
+In addition to the network construction and heatmap generation, the Group-Fold-Changes (GFCs) will be calculated for each gene in every layer.
+
+```{r, fig.width = 10, fig.height = 7}
+source(paste0(working_directory,"scripts/", "exp_script.R"))
+
+run_expression_analysis_2(grouping_v = NULL, plot_HM = T)
+```
+
+# Integration Phase
+
+## Layer integration
+
+### Integrating the layer specific networks
+
+The previously constructed networks are now being integrated. Here, the script offers two options that help to answer different scientific questions:
+  
+  âª Function get_union():
+    The function builds an edge list representing a multi-graph from the union of all layer-specific networks. 
+    Thus, also network parts that are unique to some layers will be present in the resulting integrated network. 
+    The graph is a multi-graph if a pair of nodes is connected in more than one of the layer-specific networks. 
+    In this case all edges are transferred to the new graph.
+    
+  âª Function get_intersection(with=â¦):
+    If the interest is focused on only one of the co-expression networks and what is to be observed is how that specific network changes under differing conditions, 
+    then this function is recommended. 
+    It generates an edge list representing a multi-graph of the original reference network defined by setting the *with* parameter to the dataset it originates from 
+    (âset1â, âset2â, etc. or simply its number). Thus, the vertices of the resulting network will be identical to the reference network, but the edges connecting them will 
+    be greatly impacted by the other datasets.
+
+
+The function 'build_integrated_network' creates the network from the produced edgelist. 
+The parameter 'multi_edges' defines what happens in case of multiple edges. It can be set to:
+  
+  + 'mean': the weight of the collapsed edge is the mean weight of the multi edge.
+  + 'max': the weight of the collapsed edge is the maximum weight of the multi edge
+  + 'min': the weight of the collapsed edge is the minimum weight of the multi edge.
+
+```{r merge networks}
+source(paste0(working_directory,"scripts/", "network_intersect_or_union.R" ))
+integrated_output <- list()
+
+integrated_output[["combined_edgelist"]] <- get_union()
+integrated_output[["merged_net"]] <- build_integrated_network(multi_edges = "mean")
+```
+
+### Merging the GFCs
+
+To integrate the layers, not only the structural integration as described above is necessary, but also the integration of GFCs for each node such that 
+the activity of that node under the different conditions can be observed. In the case of multiple datasets, the GFCs had previously been calculated with the datasetâs controls as a reference, which makes them comparable across datasets despite possibly different sequencing depths.
+For those genes that are not present in all of the analysed datasets, the GFC_when_missing parameter can be set to the value which should substitute the
+missing data. So far, this is set to the negative value of the global settings parameter range_GFC to symbolize maximum down regulation.
+
+```{r merge GFCs}
+source(paste0(working_directory,"scripts/", "merge_GFCs.R" ))
+
+integrated_output[["GFC_all_layers"]] <- merge_GFCs(GFC_when_missing = -global_settings$range_GFC)
+```
+
+# Post-Integration Phase
+
+## module detection
+  
+Due to the way in which the network has been constructed, areas of strong co-expression show a high density, given that their high correlation coefficients 
+correspond to short edges. To group the genes into meaningful modules within which we find highly similar expression patterns, the script offers 5 different 
+community detection algorithms as implemented by the igraph package: *cluster_louvain*. *cluster_label_prop*, *cluster_fast_greedy*, *cluster_infomap*, *cluster_walktrap*.
+
+To aid the selection of a suitable algorithm based on the data, the network is originally clustered using the greedy algorithm *cluster_louvain*, 
+which is known to be fast and to find rather large clusters. The parameter *no_of_iterations* defines how many times the clustering is performed on the network. 
+This is meant to lower the probability of always visiting the same local minimum in the landscape of solutions. 
+ *max_cluster_count_per_gene* determines how many different clusters a gene is allowed to be associated with over the iterations. 
+If the number exceeds that threshold, the gene is marked white, symbolizing that it is non-allocatable and will thus be left out of the network and further analysis.
+  
+ *If you already have a file that defines each genes cluster, please read the comment and the alternative codeline at the bottom of the chunk.*
+  
+The network with nodes coloured by module affiliation and a heatmap that visualizes the mean GFCs per module and condition are plotted.
+The function parameters *cluster_columns* and *cluster_rows* determine whether or not the columns or the rows of the heatmap, respectively, should be clustered using hierarchical clustering. *return_HM* defines if the heatmap should be plotted and returned as an object (return_HM = TRUE) 
+or only plotted (return_HM = FALSE).
+
+```{r compute clusters}
+source(paste0(working_directory,"scripts/", "cluster_calculation_MultiOmics.R" ))
+source(paste0(working_directory,"scripts/", "external_signature.R" ))
+integrated_output[["cluster_calc"]] <- list()
+
+
+integrated_output$cluster_calc[["cluster_information"]] <- cluster_calculation(no_of_iterations = 10,
+  cluster_algo ="cluster_louvain",                                                                          max_cluster_count_per_gene = 1)
+
+#if you already have clusters and external clustering you would like to use, provide a gene to cluster (gtc) data frame, where the first column contians genes and the second column contains cluster names:
+
+#update_clustering_algorithm(gtc = gtc, alluvials = NULL)
+
+plot_cluster_heatmap(cluster_columns = F,
+                            cluster_rows = T, 
+                            return_HM = F,)
+```
+
+## Plotting the network coloured by module
+
+The network plotting function only receives the network object to be plotted as input and colours the nodes according to module membership.
+
+```{r plot network coloured by cluster, fig.width=10, fig.height=7}
+source(paste0(working_directory,"scripts/", "plot_network_hCoCena.R" ))
+
+integrated_output$cluster_calc[["layout"]] <- plot_integrated_network(integrated_output$merged_net)
+```
+
+## Evaluating the different community detection algorithms
+
+### Alluvial plots
+
+In the subsequent steps, different visualizations are provided to illustrate how the clustering changes when using other algorithms compared to the Louvain reference. 
+In the first step, an alluvial plot is created for each of the other clustering algorithms, illustrating how the genes disperse from the Louvain 
+clusters depicted on the left side of the plot to the clusters of the compared algorithm on the right side of the plot.
+These plots together with the previously shown coloured network grant a better understanding on how the clustering may change. 
+The alluvial plots also give insight into the number of genes lost due to non-assignability to any cluster as depicted by the white cluster.
+
+```{r alluvial plots}
+integrated_output[["alluvials"]] <- algo_alluvial()
+```
+
+### Setting the clustering algorithm (Fig. 5 supplement 1 C)
+
+Based on the previously gathered information, the clustering algorithm is chosen by setting the *new_algo* parameter accordingly. 
+
+```{r choose clustering algorithm}
+update_clustering_algorithm(new_algo = "cluster_walktrap")
+
+plot_cluster_heatmap(cluster_columns = F,
+                            cluster_rows = T, 
+                            return_HM = F,
+                          col_order = c("B_C_RNA","B_T_6_RNA","B_A_6_RNA","B_T_12_RNA","B_A_12_RNA","H_C_RNA","H_T_6_RNA","H_A_6_RNA","H_T_12_RNA","H_A_12_RNA"))
+
+# if you want to choose a predefine clustering, use the code below. For information on the gtc parameter, please see above.
+
+#update_clustering_algorithm(gtc = gtc)
+```
+##Export integrated ATAC output
+
+```{r}
+#save(integrated_output, file="/home/caterina/data/hCoCena/h_working_directory/data/integrated_output_A_revised_topK.RData")
+```
+
+#Session info
+
+```{r}
+info <- sessionInfo()
+info
+```
+

@@ -1,0 +1,1849 @@
+---
+title: "ATAC_cispt"
+author: "C Carraro"
+date: "080822"
+output: html_document
+---
+
+# Load environment
+
+```{r}
+load("/home/caterina/data/analysis/envs/080822_ATACseq_cispt_GH.RData")
+```
+
+
+# Install packages
+
+```{r}
+list.of.bioc.packages<- c("Rsamtools",
+                          "GenomicAlignments",
+                          "rtracklayer",
+                          "ChIPseeker",
+                          "DBI",
+                          "TxDb.Hsapiens.UCSC.hg38.knownGene",
+                          "org.Mm.eg.db",
+                          "DESeq2",
+                          "org.Hs.eg.db",
+                          "vsn",
+                          "tximport",
+                          "rhdf5",
+                          "clusterProfiler",
+                          "DOSE",
+                          "GSEABase",
+                          "RColorBrewer",
+                          "ComplexHeatmap",
+                          "pheatmap",
+                          "genefilter",
+                          "biomaRt",
+                          "limma",
+                          "sva",
+                          "IHW",
+                          "Gviz",
+                          "tidyverse",
+                          "useful",
+                          "gplots",
+                          "Matrix",
+                          "SummarizedExperiment",
+                          "BiocParallel",
+                          "ggrepel",
+                          "ggbeeswarm",
+                          "grid",
+                          "gridextra",
+                          "reshape2",
+                          "factoextra",
+                          "Hmisc",
+                          "GenomicRanges",
+                          "cowplot")
+new.packages.bioc <- list.of.bioc.packages[!(list.of.bioc.packages %in% installed.packages()[,"Package"])]
+ 
+if(length(new.packages.bioc)>0)if (!requireNamespace("BiocManager")) install.packages("BiocManager")
+BiocManager::install(new.packages.bioc, update = FALSE)
+```
+
+# Load packages
+
+```{r, message=FALSE}
+library(tidyverse)
+library(useful)
+library(gplots)
+library(Matrix)
+library(SummarizedExperiment)
+library(BiocParallel)
+library(ggrepel)
+library(ggbeeswarm)
+library(grid)
+library(gridExtra)
+library(reshape2)
+library(factoextra)
+library(Hmisc)
+library(GenomicRanges)
+library(GenomicAlignments)
+library(rtracklayer)
+library(Rsamtools)
+library(ChIPseeker)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(biomaRt)
+library(org.Mm.eg.db) 
+library(org.Hs.eg.db) 
+library(DESeq2)
+library(tximport)
+library(vsn)
+library(IHW)
+library(rhdf5)
+library(genefilter)
+library(fdrtool)
+library(RColorBrewer)
+library(pheatmap)
+library(cowplot) 
+library(Gviz)
+library(GSEABase)
+library(clusterProfiler)
+library(DOSE)
+library(openxlsx)
+library(sva)
+library(limma)
+library(ggplot2)
+library(UpSetR)
+```
+
+# Define analysis functions
+
+### Peak import
+
+```{r}
+# # Importing of BED files and production of GRanges object of all peaks
+# importBEDpeaks <- function(pattern = NULL, 
+#                            path = NULL,
+#                            exclude = NULL){
+#   fileNames <- dir(path, pattern = pattern)
+#   if(!is.null(exclude)){
+#    fileNames <- fileNames[!grepl(exclude, fileNames)] 
+#   }
+#   bedPeaks <- GRangesList()
+#   for (i in fileNames) {
+#     tmp <- read.table(paste(path,i,sep="/"))
+#     bedPeaks[[i]] <- GRanges(seqnames = Rle(tmp$V1), ranges = IRanges(start = tmp$V2, end = tmp$V3), strand = Rle("*"))
+#     bedPeaks[[i]] <- bedPeaks[[i]][grepl("chr",bedPeaks[[i]]@seqnames),]
+#   }
+#   if (!is.null(pattern)) names(bedPeaks) <- sub(pattern, "", names(bedPeaks), fixed = TRUE)
+#   return(bedPeaks)
+# }
+```
+
+### Peak unification
+
+```{r}
+# # Produce union of all peaks for counting of the reads
+# unionPeaks <- function(peaks) {
+#   upks <- GenomicRanges::reduce(unlist(peaks))
+#   for (i in names(peaks)) {
+#     mcols(upks)[, i] <- countOverlaps(subject = peaks[[i]],
+#                                       query = upks) != 0
+#   }
+#   names(upks) <- paste(seqnames(upks), start(upks), end(upks), sep="_")
+#   return(upks)
+# }
+```
+
+### Count table
+
+```{r}
+# # Prepare count table for all peaks
+# peakCountTable <- function(peaks, path = NULL, pattern = NULL,
+#                            exclude = NULL) {
+#   fileNames <- dir(path, pattern = pattern)
+#   if(!is.null(exclude)){
+#    fileNames <- fileNames[!grepl(exclude, fileNames)] 
+#   }
+#   bamFiles <- BamFileList(paste(path,fileNames,sep="/"), asMates = TRUE)
+#   countTable <- summarizeOverlaps(features = peaks,
+#                                   reads = bamFiles,
+#                                   mode = "Union",
+#                                   singleEnd = FALSE,
+#                                   fragments =FALSE,
+#                                   ignore.strand = TRUE)
+#   if (!is.null(pattern)) colnames(countTable) <- sub(pattern, "", colnames(countTable))
+#   return(countTable)
+# }
+```
+
+### Heatmap color scaling
+
+```{r}
+# scaleColors <- function(data = input_scale, # data to use
+#                         maxvalue = NULL # value at which the color is fully red / blue
+# ){
+#   if(is.null(maxvalue)){
+#     maxvalue <- floor(min(abs(min(data)), max(data)))
+#   }
+#   if(max(data) > abs(min(data))){
+#     if(ceiling(max(data)) == maxvalue){
+#       myBreaks <- c(floor(-max(data)), seq(-maxvalue+0.2, maxvalue-0.2, 0.2),  ceiling(max(data)))
+#     } else{
+#       myBreaks <- c(floor(-max(data)), seq(-maxvalue, maxvalue, 0.2),  ceiling(max(data)))
+#     }
+#     paletteLength <- length(myBreaks)
+#     myColor <- colorRampPalette(c("blue", "white", "red"))(paletteLength)
+#   } else {
+#     if(-floor(min(data)) == maxvalue){
+#       myBreaks <- c(floor(min(data)), seq(-maxvalue+0.2, maxvalue-0.2, 0.2),  ceiling(min(data)))
+#     } else{
+#       myBreaks <- c(floor(min(data)), seq(-maxvalue, maxvalue, 0.2),  ceiling(abs(min(data))))
+#     }
+#     paletteLength <- length(myBreaks)
+#     myColor <- colorRampPalette(c("blue", "white", "red"))(paletteLength)
+#   }
+#   return(list(breaks = myBreaks, color = myColor))
+# }
+```
+
+### ATAC Heatmap
+
+```{r}
+# ATACHeatmap <- function(set,
+#                         feature,
+#                         title="",
+#                         show_rownames = FALSE,
+#                         cluster_cols = FALSE,
+#                         font.size=7,
+#                         DAR=FALSE,
+#                         max.value=2){
+#   
+#   if(set=="all"){
+#     input <- norm
+#   }else if(feature=="genes"){
+#     peakset <- rownames(peakAnnotation.filt.df[peakAnnotation.filt.df$symbol %in% set,])
+#     input <- norm[rownames(norm) %in% peakset,]
+#   }else if(feature=="peaks"){
+#     input <- norm[rownames(norm) %in% set,]
+#   }
+# 
+#   if(!DAR==FALSE){
+#     input <- input[rownames(input) %in% rownames(DAR),]
+#   }
+#  
+#   idx <- match(rownames(input),rownames(peakAnnotation.filt.df))
+#   rownames(input) <- paste(rownames(input),peakAnnotation.filt.df$symbol[idx], sep="_")
+# 
+#   input_scale <- t(scale(t(input)))
+#   
+#   input_scale <- input_scale[,sample_table[order(sample_table$order,decreasing = FALSE),]$sample]
+#   
+#   pheatmap(input_scale,
+#          main=title,
+#          show_rownames=show_rownames,
+#          show_colnames=TRUE,
+#          cluster_cols = cluster_cols, 
+#          fontsize = font.size,
+#          annotation_col = sample_table[,c("Group","Celltype","Time","Compound")],
+#          breaks = scaleColors(data = input_scale, maxvalue = max.value)[["breaks"]], 
+#          color = scaleColors(data = input_scale, maxvalue = max.value)[["color"]])
+# }
+```
+
+### PCA
+
+```{r}
+plotPCA <- function(pca_input = dds_vst,
+                    ntop="all", 
+                    xPC=1, 
+                    yPC=2,
+                    point_size=3,
+                    title="",
+                    color,
+                    #shape,
+                    anno_color="NULL"){
+  
+  vst_matrix <- as.matrix(assay(pca_input))
+  
+  if(ntop=="all"){
+    pca <- prcomp(t(vst_matrix)) 
+  }else{
+    # select the ntop genes by variance
+    select <- order(rowVars(vst_matrix), decreasing=TRUE)[c(1:ntop)]
+    pca <- prcomp(t(vst_matrix[select,]))
+  }
+  
+  #calculate explained variance per PC
+  explVar <- pca$sdev^2/sum(pca$sdev^2)
+  # transform variance to percent
+  percentVar <- round(100 * explVar[c(xPC,yPC)], digits=1)
+  
+  # Define data for plotting  
+  pcaData <- data.frame(xPC=pca$x[,xPC], 
+                        yPC=pca$x[,yPC], 
+                        color = sample_table[[color]],
+                        #shape = sample_table[[shape]],
+                        name= as.character(sample_table$Sample),
+                        stringsAsFactors = F)
+  
+  #plot PCA
+  pca_plot <- ggplot(pcaData, aes(x = xPC, y = yPC, fill=color)) +
+    geom_point(size =point_size, shape=21, color="black") + theme_bw()+
+      xlab(paste0("PC ",xPC, ": ", percentVar[1], "% variance")) +
+    ylab(paste0("PC ",yPC,": ", percentVar[2], "% variance")) +
+    
+    geom_text_repel(aes(label = name), colour = "black")
+  
+  if(anno_color[1] == "NULL"){
+    pca_plot <- pca_plot + scale_color_discrete(name=color)
+  }else{
+    pca_plot <- pca_plot + scale_fill_manual(values=anno_color)
+  }
+  
+  pca_plot
+}
+```
+
+### PCA from DF function
+
+```{r}
+# plotPCADF <- function(pca_input = dds_vst,
+#                      ntop=500, 
+#                      xPC=1, 
+#                      yPC=2,
+#                      color,
+#                      anno_colour="NULL",
+#                      shape="NULL",
+#                      point_size=3,
+#                      title="PCA", 
+#                     label = NULL, 
+#                     label_subset = NULL){
+#   
+#   if(!is.data.frame(pca_input)){
+#   vst_matrix <-as.matrix(assay(pca_input))
+#   }else{
+#    vst_matrix <- pca_input
+#   }
+#   
+#   if(ntop=="all"){
+#     pca <- prcomp(t(vst_matrix)) 
+#   }else{
+#     # select the ntop genes by variance
+#     select <- order(rowVars(vst_matrix), decreasing=TRUE)[c(1:ntop)]
+#     pca <- prcomp(t(vst_matrix[select,]))
+#   }
+#   
+#   #calculate explained variance per PC
+#   explVar <- pca$sdev^2/sum(pca$sdev^2)
+#   # transform variance to percent
+#   percentVar <- round(100 * explVar[c(xPC,yPC)], digits=1)
+# 
+#   # Define data for plotting  
+#   pcaData <- data.frame(xPC=pca$x[,xPC], 
+#                         yPC=pca$x[,yPC], 
+#                         color = sample_table[[color]],
+#                         name= as.character(sample_table$ID),
+#                         stringsAsFactors = F)
+#   
+#   #plot PCA
+#   if(is.factor(pcaData$color) || is.character(pcaData$color)|| is.integer(pcaData$color)){
+#     if(shape == "NULL"){
+#         pca_plot <- ggplot(pcaData, aes(x = xPC, y = yPC, colour=color)) +
+#                           geom_point(size =point_size)
+#       }else{
+#         pcaData$shape = sample_table[[shape]]
+#         pca_plot <- ggplot(pcaData, aes(x = xPC, y = yPC, colour=color, shape=shape)) +
+#                           geom_point(size =point_size) +
+#                           scale_shape_discrete(name=shape)
+#       }
+#     
+#     if(anno_colour[1] == "NULL"){
+#         pca_plot <- pca_plot + scale_color_discrete(name=color)
+#     }else{
+#         pca_plot <- pca_plot + scale_color_manual(values=anno_colour, name=color)
+#     }
+#     
+#   }else if(is.numeric(pcaData$color)){
+#       if(shape == "NULL"){
+#         pca_plot <- ggplot(pcaData, aes(x = xPC, y = yPC, colour=color)) +
+#           geom_point(size =point_size) +
+#           scale_color_gradientn(colours = bluered(100),name=color)
+#       }else{
+#         pcaData$shape = sample_table[[shape]]
+#         pca_plot <- ggplot(pcaData, aes(x = xPC, y = yPC, colour=color, shape=shape)) +
+#           geom_point(size =point_size) +
+#           scale_color_gradientn(colours = bluered(100),name=color)+
+#           scale_shape_discrete(name=shape)
+#       }
+#   }
+# 
+# # adds a label to the plot. To label only specific points, put them in the arument label_subset
+#   if (!is.null(label) == TRUE){
+#     pcaData$label <- sample_table[[label]]
+#     if(!is.null(label_subset) == TRUE){
+#     pcaData_labeled <- pcaData[pcaData$label %in% label_subset,]
+#     } else {
+#       pcaData_labeled <- pcaData
+#     }
+#       pca_plot <- pca_plot + 
+#       geom_text_repel(data = pcaData_labeled, aes(label = label), nudge_x = 2, nudge_y = 2, colour = "black") 
+#   }
+#   
+#     pca_plot <- pca_plot+
+#     xlab(paste0("PC ",xPC, ": ", percentVar[1], "% variance")) +
+#     ylab(paste0("PC ",yPC,": ", percentVar[2], "% variance")) +
+#     coord_fixed()+
+#     theme_classic()+        
+#     theme(aspect.ratio = 1)+
+#     ggtitle(title)
+#   
+#   pca_plot
+# }
+```
+
+### DESeq2 output
+
+```{r}
+# # Specify structure of DESeq2_analysis_object
+# setClass(Class = "DESeq2_analysis_object",
+#          slots = c(results="data.frame", DE_genes="list", Number_DE_genes="list"))
+# 
+# 
+# # Wrapper Function to perform DESeq2 differential testing
+# DEAnalysis <- function(condition,
+#                        alpha = 0.05, 
+#                        lfcThreshold = 0,
+#                        sigFC = 2, 
+#                        multiple_testing = "IHW",
+#                        independentFiltering="TRUE",
+#                        shrinkage = TRUE,
+#                        shrinkType = "normal"){
+#   # create results_list  
+#   results_list <- list()
+#   # print parameters
+#   results_list$parameters <-list(multiple_testing = multiple_testing,
+#                                  p_value_threshold = alpha,
+#                                  log2_FC_threshold = lfcThreshold,
+#                                  shrinkage = shrinkage,
+#                                  shrinkage_type = shrinkType)
+#   # Run results() function on comparisons defined in comparison table
+#   for (i in 1:nrow(comparison_table)){
+#     # create DE_object
+#     DE_object <- new(Class = "DESeq2_analysis_object")
+#     # IHW
+#     if (multiple_testing=="IHW") {
+#       res_deseq_lfc <- results(dds,
+#                                contrast = c(condition,
+#                                             paste(comparison_table$comparison[i]),
+#                                             paste(comparison_table$control[i])),
+#                                lfcThreshold = lfcThreshold,
+#                                alpha = alpha,
+#                                filterFun = ihw,
+#                                altHypothesis = "greaterAbs")
+#       # Independent Filtering
+#     }else {
+#       res_deseq_lfc <- results(dds,
+#                                contrast = c(condition,
+#                                             paste(comparison_table$comparison[i]),
+#                                             paste(comparison_table$control[i])),
+#                                lfcThreshold = lfcThreshold,
+#                                alpha = alpha,
+#                                independentFiltering = independentFiltering,
+#                                altHypothesis = "greaterAbs",
+#                                pAdjustMethod= multiple_testing)
+#     }
+#     if(shrinkage == TRUE){
+#       res_deseq_lfc <- lfcShrink(dds, 
+#                                  contrast = c(condition,
+#                                               paste(comparison_table$comparison[i]),
+#                                               paste(comparison_table$control[i])),
+#                                  res=res_deseq_lfc,
+#                                  type = shrinkType)
+#     }
+#     res_deseq_lfc <- as.data.frame(res_deseq_lfc)
+#     # indicate significant DE genes  
+#     res_deseq_lfc$regulation <- ifelse(!is.na(res_deseq_lfc$padj)&
+#                                          res_deseq_lfc$padj <= alpha&
+#                                          res_deseq_lfc$log2FoldChange > log(sigFC,2),
+#                                        "up",
+#                                        ifelse(!is.na(res_deseq_lfc$padj)&
+#                                                 res_deseq_lfc$padj <= alpha&
+#                                                 res_deseq_lfc$log2FoldChange < -log(sigFC,2),
+#                                               "down",
+#                                               "n.s."))
+#     # add gene annotation to results table
+#     res_deseq_lfc$peakid <- row.names(res_deseq_lfc) # ensembl-IDs as row names
+#     res_deseq_lfc <- merge(res_deseq_lfc, 
+#                            norm_anno[,c("peakid", 
+#                                         "symbol", 
+#                                         "type",
+#                                         "description",
+#                                         "geneChr",
+#                                         "geneStart",
+#                                         "geneEnd",
+#                                         "geneLength",
+#                                         "geneStrand",
+#                                         "geneId",
+#                                         "distanceToTSS",
+#                                         "start",
+#                                         "end",
+#                                         "annotation")], 
+#                            by = "peakid") 
+#     row.names(res_deseq_lfc) <- res_deseq_lfc$peakid
+#     res_deseq_lfc$comparison<-paste(comparison_table$comparison[i]," vs ",comparison_table$control[i],
+#                                     sep="")
+#     # re-order results table
+#     if (multiple_testing=="IHW") {
+#       res_deseq_lfc<-res_deseq_lfc[,c("peakid", 
+#                                         "symbol",
+#                                       "geneId",
+#                                         "type",
+#                                         "description",
+#                                         "geneChr",
+#                                      "comparison",
+#                                      "regulation",
+#                                      "baseMean",
+#                                      "log2FoldChange",
+#                                      "lfcSE",
+#                                      "stat",
+#                                      "pvalue",
+#                                      "padj",
+#                                      "weight",
+#                                      "annotation")]
+#     }else{
+#       res_deseq_lfc<-res_deseq_lfc[,c("peakid", 
+#                                         "symbol",
+#                                       "geneId",
+#                                         "type",
+#                                         "description",
+#                                         "geneChr",
+#                                       "comparison",
+#                                       "regulation",
+#                                       "baseMean",
+#                                       "log2FoldChange",
+#                                       "lfcSE",
+#                                       "stat",
+#                                       "pvalue",
+#                                       "padj",
+#                                       "annotation")]
+#     }
+#     # print result table
+#     DE_object@results <- res_deseq_lfc
+#     # print DE genes in seperate tables
+#     DE_object@DE_genes <- list(up_regulated_Genes = res_deseq_lfc[res_deseq_lfc$regulation =="up",],
+#                                down_regulated_Genes= res_deseq_lfc[res_deseq_lfc$regulation =="down",])
+#     # print the numbers of DE genes
+#     DE_object@Number_DE_genes <- list(up_regulated_Genes = nrow(DE_object@DE_genes$up_regulated_Genes),
+#                                       down_regulated_Genes= nrow(DE_object@DE_genes$down_regulated_Genes))
+#     # write DE_object into results_list
+#     results_list[[paste(comparison_table$comparison[i], "vs", comparison_table$control[i], sep="_")]] <- DE_object
+#   }
+#   return(results_list)
+# }
+```
+
+### Remove potential batch effects using the removeBatchEffect function from limma
+
+```{r}
+# limmaBatchEffectRemoval <- function(input=dds_vst,
+#                                        batchfactor, # name of batch effect column in sample_table
+#                                        batchfactor_2=NULL,
+#                                        modelfactor){ # name of model effect column in sample_table
+#   
+#   # rlog-transformed input
+#   x <- as.matrix(assay(input)) 
+#   
+#   # design matrix
+#   model <- model.matrix(~sample_table[,c(modelfactor)])
+#   
+#   # run batch remocal function
+#   if(is.numeric(sample_table[,colnames(sample_table) == batchfactor[1]])==T){
+#     as.data.frame(removeBatchEffect(x,
+#                                     covariates = sample_table[,colnames(sample_table) %in% batchfactor],
+#                                     design = model))
+#     }else{
+#       if(is.null(batchfactor_2)){
+#         as.data.frame(removeBatchEffect(x=x,
+#                                         batch = sample_table[,colnames(sample_table) == batchfactor],
+#                                         design = model))
+#       }else{
+#         as.data.frame(removeBatchEffect(x=x,
+#                                         batch = sample_table[,colnames(sample_table) == batchfactor],
+#                                         batch2 = sample_table[,colnames(sample_table) == batchfactor_2],
+#                                         design = model))
+#       }
+#     }
+# }
+```
+
+### Heatmap and GOEA of PCA loadings
+
+```{r}
+# plotLoadings_ATAC <- function(input=dds_vst,
+#                          PC="PC1", 
+#                          ntop="all",
+#                          GSEA_pcutoff=0.3,
+#                          GSEA_qcutoff=0.3,
+#                          font.size=10,
+#                          cluster_rows=FALSE,
+#                          cluster_cols=FALSE){
+#   if(ntop=="all"){
+#     pca <- prcomp(t(assay(input))) 
+#   }else{
+#     select <- order(rowVars(assay(input)), decreasing=TRUE)[c(1:ntop)]
+#     pca <- prcomp(t(assay(input)[select,]))
+#   }
+#   
+#   Loadings <- pca$rotation[,PC]
+#   Loadings <- Loadings[order(Loadings, decreasing = T)]
+#   Loadings <- names(Loadings[c(1:25,(length(Loadings)-24):length(Loadings))])
+#   
+#   heatmap <- norm[rownames(norm) %in% Loadings,]
+#   idx <- match(rownames(heatmap),rownames(peakAnnotation.df))
+#   rownames(heatmap) <- paste(rownames(heatmap),": ",peakAnnotation.df$symbol[idx],sep="")
+#   heatmap <- heatmap[,colnames(heatmap) %in% sample_table$sample]
+#   heatmap_scale <- as.matrix(t(scale(t(heatmap))))
+#   
+#   heatmap_scale <- heatmap_scale[,sample_table[order(sample_table$order,decreasing = FALSE),]$sample]
+#   
+#   # Heatmap
+#   p1 <- pheatmap(heatmap_scale,
+#                  main=paste("top 25 ",PC, " loadings in both directions",sep=""),
+#                  show_rownames=TRUE,
+#                  show_colnames = TRUE,
+#                  cluster_rows = cluster_rows,
+#                  cluster_cols = cluster_cols,
+#                  annotation_col = sample_table[,c("Group","Time","Compound","Celltype"),drop=FALSE],
+#                  breaks = scaleColors(data = heatmap_scale, maxvalue = 2)[["breaks"]], 
+#                  color = scaleColors(data = heatmap_scale, maxvalue = 2)[["color"]],
+#                  fontsize=font.size,
+#                  silent = TRUE)
+#   p1 <- ggpubr::as_ggplot(p1$gtable)
+#   
+#   #GOEA
+#   up <- pca$rotation[,PC]
+#   up <- names(up[order(up, decreasing = T)])[1:200]
+#   up_genes <- peakAnnotation.df[up,]$geneId
+#   
+#   GOup <- as.data.frame(enrichGO(gene = up_genes,
+#                                  universe = peakAnnotation.filt.df$geneId,
+#                                  OrgDb = org.Hs.eg.db,
+#                                  ont = "BP",
+#                                  pAdjustMethod = "bonferroni",
+#                                  pvalueCutoff  = GSEA_pcutoff,
+#                                  qvalueCutoff  = GSEA_qcutoff,
+#                                  readable      = T))
+#   
+#   if(nrow(GOup)<1){
+#     p2 <- paste("No enriched GO terms for genes annotated to \n top 200 peaks high on ",PC," (bonferroni corrected p < ",GSEA_qcutoff,")",sep="")
+#     p2 <- ggpubr::as_ggplot(textGrob(p2))
+#   }else{
+#     GOup <- GOup[order(GOup$Count,decreasing=FALSE),]
+#     GOup$Description <- ifelse(nchar(GOup$Description)>50,
+#                                paste(substr(GOup$Description, 1, 50),"[...]",sep=""),
+#                                GOup$Description)
+#     GOup$Description <- factor(GOup$Description, levels = unique(GOup$Description))
+#     GOup$GeneRatio <- factor(GOup$GeneRatio, levels = unique(GOup$GeneRatio))
+#     
+#     if(nrow(GOup)>10){
+#       GOup <- GOup[1:10,] 
+#     }
+#     
+#     p2 <- ggplot(GOup, aes(x = GeneRatio, y = Description, color = p.adjust)) +
+#       geom_point(aes(size = Count)) +
+#       scale_colour_gradientn(colours=c('red', 
+#                                        'orange', 
+#                                        'darkblue',
+#                                        'darkblue'),
+#                              limits=c(0,1),
+#                              values   = c(0,0.05,0.2,0.5,1),
+#                              breaks   = c(0.05,0.2,1),
+#                              labels = format(c(0.05,0.2,1))) +
+#       ylab(NULL) +
+#       ggtitle(paste("Enriched GO terms for genes annotated to \n top 200 peaks high on ",PC," (bonferroni corrected p < ",GSEA_qcutoff,")",sep=""))+
+#       theme_bw() +
+#       theme(text = element_text(size=font.size),
+#             plot.title = element_text(size=font.size),
+#             axis.text.x = element_text(size=font.size,angle = 90),
+#             axis.text.y = element_text(size=font.size))
+#   }
+#   
+#   down <- pca$rotation[,PC]
+#   down <- names(down[order(down, decreasing = F)])[1:200]
+#   down_genes <- peakAnnotation.df[down,]$geneId
+#   
+#   GOdown <- as.data.frame(enrichGO(gene = down_genes,
+#                                    universe = peakAnnotation.filt.df$geneId,
+#                                    OrgDb = org.Hs.eg.db,
+#                                    ont = "BP",
+#                                    pAdjustMethod = "bonferroni",
+#                                    pvalueCutoff  = GSEA_pcutoff,
+#                                    qvalueCutoff  = GSEA_qcutoff,
+#                                    readable      = T))
+#   if(nrow(GOdown)<1){
+#     p3 <- paste("No enriched GO terms for genes annotated to \n top 200 peaks low on ",PC," (bonferroni corrected p < ",GSEA_qcutoff,")",sep="")
+#     p3 <- ggpubr::as_ggplot(textGrob(p3))
+#   }else{
+#     GOdown <- GOdown[order(GOdown$Count,decreasing=FALSE),]
+#     GOdown$Description <- ifelse(nchar(GOdown$Description)>50,
+#                                  paste(substr(GOdown$Description, 1, 50),"[...]",sep=""),
+#                                  GOdown$Description)
+#     GOdown$Description <- factor(GOdown$Description, levels = unique(GOdown$Description))
+#     GOdown$GeneRatio <- factor(GOdown$GeneRatio, levels = unique(GOdown$GeneRatio))
+#     if(nrow(GOdown)>10){
+#       GOdown <- GOdown[1:10,] 
+#     }
+#     
+#     p3 <- ggplot(GOdown, aes(x = GeneRatio, y = Description, color = p.adjust)) +
+#       geom_point(aes(size = Count)) +
+#       scale_colour_gradientn(colours=c('red', 
+#                                        'orange', 
+#                                        'darkblue',
+#                                        'darkblue'),
+#                              limits=c(0,1),
+#                              values   = c(0,0.05,0.2,0.5,1),
+#                              breaks   = c(0.05,0.2,1),
+#                              labels = format(c(0.05,0.2,1))) +
+#       ylab(NULL) +
+#       ggtitle(paste("Enriched GO terms for genes annotated to \n top 200 peaks low on ",PC," (bonferroni corrected p < ",GSEA_qcutoff,")",sep=""))+
+#       theme_bw() +
+#       theme(text = element_text(size=font.size),
+#             plot.title = element_text(size=font.size),
+#             axis.text.x = element_text(size=font.size,angle = 90),
+#             axis.text.y = element_text(size=font.size)) 
+#   }
+#   right_col <- plot_grid(p2, p3, align = 'v', ncol=1)
+#   return(plot_grid(p1, right_col, ncol = 2, rel_widths = c(1.5, 1)))
+# }
+```
+
+### DAR heatmap
+
+```{r}
+# DARheatmap <- function(results,
+#                        data,
+#                        DAR_sig="padj",
+#                        DAR_p="0.1",
+#                        DAR_FC=1.5,
+#                        annotation,
+#                        show_rownames=FALSE,
+#                        cluster_rows=FALSE,
+#                        cluster_cols=FALSE){
+#   if(DAR_sig=="pvalue"){
+#     DAR <- rownames(results[results$pvalue < DAR_p & 
+#                               abs(results$log2FoldChange)>log(DAR_FC,2),])
+#   }else if(DAR_sig=="padj"){
+#     DAR <- rownames(results[results$padj < DAR_p & 
+#                               abs(results$log2FoldChange)>log(DAR_FC,2),])
+#     }else{
+#     print("Choose either 'pvalue' or 'padj' for DAR_sig")
+#   }
+#   
+#   DARcounts <- data[rownames(data) %in% DAR,]
+#   idx <- match(rownames(DARcounts), rownames(peakAnnotation.df))
+#   rownames(DARcounts) <- paste(rownames(DARcounts), peakAnnotation.df$symbol[idx], sep=": ")
+#   DAR_scaled <- t(scale(t(DARcounts), scale=TRUE, center = TRUE))
+#   DAR_scaled <- DAR_scaled[,sample_table[order(sample_table$order,decreasing = FALSE),]$sample]
+#   
+#   p1 <- pheatmap(DAR_scaled,
+#                  main="Hierarchical Clustering of differential accessible regions",
+#                  show_rownames=show_rownames,
+#                  show_colnames=TRUE,
+#                  cluster_cols = cluster_cols,
+#                  fontsize = 7, 
+#                  annotation_col = sample_table[,c("Group","Celltype","Time","Compound"),drop=FALSE],
+#                  breaks = scaleColors(data = DAR_scaled, maxvalue = 2)[["breaks"]], 
+#                  color = scaleColors(data = DAR_scaled, maxvalue = 2)[["color"]],
+#                  silent = TRUE)
+#   
+#   p1 <- ggpubr::as_ggplot(p1$gtable)
+#   
+#   return(p1)
+# }
+```
+
+### Union of DEgenes (coding in promoter regions)
+
+```{r}
+uDEG <- function(comparisons){
+  uDEGs <- NULL
+  tmp <- DEresults[names(DEresults) %in% comparisons]
+  for(i in 1:length(comparisons)){
+    DEGs <- as.data.frame(tmp[[i]]@results[tmp[[i]]@results$regulation %in% c("up","down"),])
+    DEGs <- subset(DEGs, type=='protein_coding')
+    DEGs <- subset(DEGs, DEGs$annotation %in% c("Promoter (<=1kb)", "Promoter (1-2kb)", "Promoter (2-3kb)"))
+    uDEGs <- unique(c(uDEGs, DEGs$symbol))
+  }
+  uDEGs
+}
+```
+
+### Union of DAR (coding in promoter regions)
+
+```{r}
+uDAR <- function(comparisons){
+  uDARs <- NULL
+  tmp <- DEresults[names(DEresults) %in% comparisons]
+  for(i in 1:length(comparisons)){
+    DARs <- as.data.frame(tmp[[i]]@results[tmp[[i]]@results$regulation %in% c("up","down"),])
+    DARs <- subset(DARs, type=='protein_coding')
+    DARs <- subset(DARs, DARs$annotation %in% c("Promoter (<=1kb)", "Promoter (1-2kb)", "Promoter (2-3kb)"))
+    uDARs <- unique(c(uDARs, DARs$peakid))
+  }
+  uDARs
+}
+```
+
+### Union of DAR (all)
+
+```{r}
+uDARall <- function(comparisons){
+  uDARs <- NULL
+  tmp <- DEresults[names(DEresults) %in% comparisons]
+  for(i in 1:length(comparisons)){
+    DARs <- as.data.frame(tmp[[i]]@results[tmp[[i]]@results$regulation %in% c("up","down"),])
+    uDARs <- unique(c(uDARs, DARs$peakid))
+  }
+  uDARs
+}
+```
+
+### Union of DEgenes UP (coding in promoter regions)
+
+```{r}
+uDEGup <- function(comparisons){
+  uDEGs <- NULL
+  tmp <- DEresults[names(DEresults) %in% comparisons]
+  for(i in 1:length(comparisons)){
+    DEGs <- as.data.frame(tmp[[i]]@results[tmp[[i]]@results$regulation %in% c("up"),])
+   DEGs <- subset(DEGs, type=='protein_coding')
+  DEGs <- subset(DEGs, DEGs$annotation %in% c("Promoter (<=1kb)", "Promoter (1-2kb)", "Promoter (2-3kb)"))
+    uDEGs <- unique(c(uDEGs, DEGs$symbol))
+  }
+  uDEGs
+}
+```
+
+### Union of DEgenes DOWN (coding in promoter regions)
+
+```{r}
+uDEGdown <- function(comparisons){
+  uDEGs <- NULL
+  tmp <- DEresults[names(DEresults) %in% comparisons]
+  for(i in 1:length(comparisons)){
+    DEGs <- as.data.frame(tmp[[i]]@results[tmp[[i]]@results$regulation %in% c("down"),])
+    DEGs <- subset(DEGs, type=='protein_coding')
+    DEGs <- subset(DEGs, DEGs$annotation %in% c("Promoter (<=1kb)", "Promoter (1-2kb)", "Promoter (2-3kb)"))
+    uDEGs <- unique(c(uDEGs, DEGs$symbol))
+  }
+  uDEGs
+}
+```
+
+### GSEA
+
+```{r}
+GSEA <-  function(input, # select DAR data frame for the selected comparison
+                  GeneSets =c("GO","KEGG","DO","Hallmark","cannonicalPathways","Motifs","ImmunoSignatures"),
+                  GOntology = "BP",
+                  up,
+                  down,
+                  pCorrection = "bonferroni", # choose the p-value adjustment method
+                  pvalueCutoff = 0.5, # set the unadj. or adj. p-value cutoff (depending on correction method)
+                  qvalueCutoff = 0.5 # set the q-value cutoff (FDR corrected)
+){
+  
+  results <- list()
+  
+  OrgDb = org.Hs.eg.db
+  
+  # Open in KO
+  entrez_up <- input[input$change==up,]$geneId
+  print(paste("Number of upregulated genes: ",length(entrez_up),sep=""))
+  entrez_down <-input[input$change==down,]$geneId
+  print(paste("Number of downregulated genes: ",length(entrez_down),sep=""))
+  
+  # GO enrichment
+  if("GO" %in% GeneSets){
+    print("Performing GO enrichment")
+    results$GOup <- as.data.frame(enrichGO(gene = entrez_up,
+                                           universe = peakAnnotation.filt.df$geneId,
+                                           OrgDb = OrgDb,
+                                           ont = GOntology,
+                                           pAdjustMethod = pCorrection,
+                                           pvalueCutoff  = pvalueCutoff,
+                                           qvalueCutoff  = qvalueCutoff,
+                                           readable      = T))
+    
+    results$GOdown <- as.data.frame(enrichGO(gene = entrez_down,
+                                             universe = peakAnnotation.filt.df$geneId,
+                                             OrgDb = OrgDb,
+                                             ont = GOntology,
+                                             pAdjustMethod = pCorrection,
+                                             pvalueCutoff  = pvalueCutoff,
+                                             qvalueCutoff  = qvalueCutoff,
+                                             readable      = T))
+  }
+  
+  # KEGG enrichment
+  if("KEGG" %in% GeneSets){
+    print("Performing KEGG enrichment")
+    org = "hsa"
+    
+    results$KEGGup <- as.data.frame(enrichKEGG(gene = entrez_up, 
+                                               organism = org,
+                                               universe = peakAnnotation.filt.df$geneId, 
+                                               pAdjustMethod = pCorrection,
+                                               pvalueCutoff  = pvalueCutoff,
+                                               qvalueCutoff = qvalueCutoff))
+    
+    results$KEGGdown <- as.data.frame(enrichKEGG(gene = entrez_down, 
+                                                 organism = org,
+                                                 universe = peakAnnotation.filt.df$geneId, 
+                                                 pAdjustMethod = pCorrection,
+                                                 pvalueCutoff  = pvalueCutoff,
+                                                 qvalueCutoff = qvalueCutoff))
+  }
+  
+  # DO enrichment
+  if("DO" %in% GeneSets){
+    print("Performing Disease Ontology enrichment")
+    
+    results$DOup <- as.data.frame(enrichDO(gene = entrez_up, 
+                                           universe = peakAnnotation.filt.df$geneId, 
+                                           pAdjustMethod = pCorrection,
+                                           pvalueCutoff  = pvalueCutoff,
+                                           qvalueCutoff = qvalueCutoff,
+                                           minGSSize     = 5,
+                                           maxGSSize     = 500,
+                                           readable=TRUE))
+    
+    results$DOdown <- as.data.frame(enrichDO(gene = entrez_down, 
+                                             universe = peakAnnotation.filt.df$geneId, 
+                                             pAdjustMethod = pCorrection,
+                                             pvalueCutoff  = pvalueCutoff,
+                                             qvalueCutoff = qvalueCutoff,
+                                             minGSSize     = 5,
+                                             maxGSSize     = 500,
+                                             readable=TRUE))
+  }
+  
+  # Hallmark enrichment
+  if("Hallmark" %in% GeneSets){
+    print("Performing Hallmark enrichment")
+    
+    results$HALLMARKup <- as.data.frame(enricher(entrez_up,
+                                                 TERM2GENE=hallmark_genes,
+                                                 universe = peakAnnotation.filt.df$geneId,  
+                                                 pAdjustMethod = pCorrection,
+                                                 pvalueCutoff  = pvalueCutoff,
+                                                 qvalueCutoff = qvalueCutoff))
+    
+    results$HALLMARKdown <- as.data.frame(enricher(entrez_down,
+                                                   TERM2GENE=hallmark_genes,
+                                                   universe = peakAnnotation.filt.df$geneId,  
+                                                   pAdjustMethod = pCorrection,
+                                                   pvalueCutoff  = pvalueCutoff,
+                                                   qvalueCutoff = qvalueCutoff))
+  }
+  
+  # Cannonical Pathway enrichment
+  if("cannonicalPathways" %in% GeneSets){
+    print("Performing Cannonical Pathway (C2) enrichment")
+    
+    results$cannonicalPathwaysup <- as.data.frame(enricher(entrez_up,
+                                                           TERM2GENE=cannonicalPathway_genes,
+                                                           universe = peakAnnotation.filt.df$geneId,  
+                                                           pAdjustMethod = pCorrection,
+                                                           pvalueCutoff  = pvalueCutoff,
+                                                           qvalueCutoff = qvalueCutoff))
+    
+    results$cannonicalPathwaysdown <- as.data.frame(enricher(entrez_down,
+                                                             TERM2GENE=cannonicalPathway_genes,
+                                                             universe = peakAnnotation.filt.df$geneId,  
+                                                             pAdjustMethod = pCorrection,
+                                                             pvalueCutoff  = pvalueCutoff,
+                                                             qvalueCutoff = qvalueCutoff))
+  }
+  
+  # Motif enrichment
+  if("Motifs" %in% GeneSets){
+    print("Performing Motif enrichment")
+    
+    results$Motifup <- as.data.frame(enricher(entrez_up,
+                                              TERM2GENE=motifs,
+                                              universe = peakAnnotation.filt.df$geneId,  
+                                              pAdjustMethod = pCorrection,
+                                              pvalueCutoff  = pvalueCutoff,
+                                              qvalueCutoff = qvalueCutoff))
+    
+    results$Motifdown <- as.data.frame(enricher(entrez_down,
+                                                TERM2GENE=motifs,
+                                                universe = peakAnnotation.filt.df$geneId,  
+                                                pAdjustMethod = pCorrection,
+                                                pvalueCutoff  = pvalueCutoff,
+                                                qvalueCutoff = qvalueCutoff))
+  }
+  
+  # Immunosignatures enrichment
+  if("ImmunoSignatures" %in% GeneSets){
+    print("Performing immunesignature enrichment")
+    
+    results$ImmSigup <- as.data.frame(enricher(entrez_up,
+                                               TERM2GENE=immuno_genes,
+                                               universe = peakAnnotation.filt.df$geneId,  
+                                               pAdjustMethod = pCorrection,
+                                               pvalueCutoff  = pvalueCutoff,
+                                               qvalueCutoff = qvalueCutoff))
+    
+    results$ImmSigdown <- as.data.frame(enricher(entrez_down,
+                                                 TERM2GENE=immuno_genes,
+                                                 universe = peakAnnotation.filt.df$geneId,  
+                                                 pAdjustMethod = pCorrection,
+                                                 pvalueCutoff  = pvalueCutoff,
+                                                 qvalueCutoff = qvalueCutoff))
+  }
+  results
+}
+```
+
+### GSEA DotPlot
+
+```{r}
+dotplotGSEA <- function(x,
+                        show=25,
+                        font.size=10,
+                        title.size=10,
+                        title.width=100,
+                        order="count"){
+  if(nrow(x)<1){
+    print("No enrichment found.")
+  }else{
+    x <- if(nrow(x)>show){x[c(1:show),]}else{x}
+    if(order=="padj"){
+    x <- x[order(x$Count,decreasing=FALSE),]
+    x$Description <- ifelse(nchar(x$Description)>50,
+                                 paste(substr(x$Description, 1, 50),"[...]",sep=""),
+                                 x$Description)
+    x$GeneRatio <- factor(x$GeneRatio, levels = unique(x$GeneRatio))
+    x <- x[order(x$p.adjust,decreasing=TRUE),]
+    x$Description <- factor(x$Description, levels = unique(x$Description))
+    }
+    if(order=="count"){
+    x <- x[order(x$Count,decreasing=FALSE),]
+    x$Description <- ifelse(nchar(x$Description)>50,
+                                 paste(substr(x$Description, 1, 50),"[...]",sep=""),
+                                 x$Description)
+    x$Description <- factor(x$Description, levels = unique(x$Description))
+    x$GeneRatio <- factor(x$GeneRatio, levels = unique(x$GeneRatio))
+    }
+    ggplot(x, aes(x = GeneRatio, y = Description, color = p.adjust)) +
+      geom_point(aes(size = Count)) +
+      scale_colour_gradientn(colours=c('red', 
+                                       'orange', 
+                                       'darkblue',
+                                       'darkblue'),
+                             limits=c(0,1),
+                             values   = c(0,0.05,0.2,0.5,1),
+                             breaks   = c(0.05,0.2,1),
+                             labels = format(c(0.05,0.2,1))) +
+      ylab(NULL) +
+      theme_bw() +
+      theme(text = element_text(size=font.size),
+            plot.title = element_text(size=title.size),
+            axis.text.x = element_text(angle = 90)) 
+  }
+}
+```
+
+### inputGSEA across comparisons
+
+```{r}
+inputcompareGSEA <- function(comp, 
+                        organism, # chose organism
+                        GeneSets =c("GO","KEGG"), # choose gene sets for enrichment
+                        ontology= "BP", # define GO subset
+                        pCorrection = "bonferroni", # choose the p-value adjustment method
+                        pvalueCutoff = 0.05, # set the unadj. or adj. p-value cutoff (depending on correction method)
+                        qvalueCutoff = 0.05, # set the q-value cutoff (FDR corrected)
+                        showMax = 20){
+  
+  if(organism == "mouse") {
+    OrgDb = org.Mm.eg.db
+  } else if(organism == "human"){
+      OrgDb = org.Hs.eg.db
+  } else {stop("Wrong Organism. Select mouse or human.")}
+
+  ENTREZlist <-  list()
+  
+  for(i in 1:length(comp)){
+  
+    DE_up <- comp[[i]][["inputUP"]]
+    entrez_up <- bitr(DE_up, fromType = "SYMBOL", toType="ENTREZID", OrgDb=OrgDb)$ENTREZID
+    DE_down <- comp[[i]][["inputDOWN"]]
+    entrez_down <- bitr(DE_down, fromType = "SYMBOL", toType="ENTREZID", OrgDb=OrgDb)$ENTREZID  
+    x <- setNames(list(entrez_up, entrez_down),
+                  c(paste(names(comp[i]),"_up",sep=""), 
+                    paste(names(comp[i]),"_down",sep="")))
+    ENTREZlist <- c(ENTREZlist,x)
+  }
+  
+  list <- list()
+  
+  # Compare the Clusters regarding their GO enrichment  
+  if("GO" %in% GeneSets){
+    print("Performing GO enrichment")
+    CompareClusters_GO <- compareCluster(geneCluster = ENTREZlist, 
+                                       fun = "enrichGO",  
+                                       universe = universe_Entrez,
+                                       OrgDb = OrgDb,
+                                       ont = ontology, 
+                                       pvalueCutoff  = pvalueCutoff, 
+                                       pAdjustMethod = pCorrection, 
+                                       qvalueCutoff  = pvalueCutoff,  
+                                       readable      = T)
+    list$GOresults <- as.data.frame(CompareClusters_GO)
+    list$GOplot <- clusterProfiler::dotplot(CompareClusters_GO, showCategory = showMax, by = "geneRatio", font.size=10)
+  }
+  
+  if("KEGG" %in% GeneSets){
+    print("Performing KEGG enrichment")
+    
+    if(organism == "mouse"){org = "mmu"} 
+    if(organism == "human"){org = "hsa"}
+    
+    # Compare the Clusters regarding their KEGG enrichment  
+    CompareClusters_KEGG <- compareCluster(geneCluster = ENTREZlist, 
+                                         fun = "enrichKEGG",  
+                                         universe = universe_Entrez,
+                                         organism = org, 
+                                         pvalueCutoff  = pvalueCutoff, 
+                                         pAdjustMethod = pCorrection, 
+                                         qvalueCutoff  = pvalueCutoff)
+    list$KEGGresults <- as.data.frame(CompareClusters_KEGG)
+    list$KEGGplot <- clusterProfiler::dotplot(CompareClusters_KEGG, showCategory = showMax, by = "geneRatio", font.size=10)
+  }
+  list
+}
+```
+
+###GSEA Dotplot multiple comparisons
+
+```{r}
+dotplotGSEA_MC <- function(x,
+                        show=25,
+                        font.size=10,
+                        title.size=10,
+                        title.width=100){
+
+    ggplot(x, aes(x = Cluster, y = Description, color = pvalue)) +
+      geom_point(aes(size = Count)) +
+      scale_colour_gradientn(colours=c('red',
+                                       '#FFFF0000',
+                                       '#FFFF0000'),
+                             limits=c(0,1),
+                             values   = c(0,0.05,0.2,1),
+                             breaks   = c(0.05,0.2,1),
+                             labels = format(c(0.05,0.2,1))) +
+      ylab(NULL) +
+      ggtitle(paste(strwrap(unique(x$Enrichment), width=title.width), collapse = "\n"))+
+      theme_bw() +
+      theme(text = element_text(size=font.size),
+            plot.title = element_text(size=title.size))
+  }
+```
+
+### Ranked Fold Change plot
+
+```{r}
+# plotFCrank <- function(comp1,
+#                        comp2){
+#     rank <- na.omit(DEresults[names(DEresults) == comp1][[1]]@results)
+#     rank <- rank[rank$padj < 0.05 , c("GENEID","comparison","log2FoldChange")]
+#     rank <- rank[order(rank$log2FoldChange,decreasing = TRUE),]
+#     rank$rank <- c(1:nrow(rank))
+#     rank2 <- DEresults[names(DEresults) == comp2][[1]]@results
+#     rank2 <- rank2[rownames(rank),c("GENEID","comparison","log2FoldChange")]
+#     rank2$rank <- rank$rank 
+#     rank <- rbind(rank, rank2)
+# 
+#     ggplot(rank,aes(x=rank,y=log2FoldChange,color=comparison)) +
+#       geom_point(alpha=0.5) +
+#       geom_line(aes(group=GENEID),color="grey",alpha=0.2)+
+#       theme_bw() +
+#       ylab("log2(FoldChange)")+
+#       xlab(paste("FC rank of " ,comp1, sep=""))+
+#       geom_hline(yintercept = 0)+
+#       #geom_hline(yintercept = c(log(2,2),-(log(2,2))), colour="firebrick1")+
+#       theme(text = element_text(size=15))+
+#       ggtitle("Comparison of fold changes (comp1 padj<0.05")+ 
+#       theme(legend.position="bottom")
+# }
+```
+
+# ATAC-seq analysis
+
+### Directories
+
+```{r}
+# projectPath <- "/home/caterina/data/alignment/2022-05-12/"
+# bamFilePath <- paste(projectPath,"output/mapped", sep = "")
+# bedFilePath <- paste(projectPath, "output/peaks", sep = "")
+# 
+# analysisPath <- "/home/caterina/data/analysis/"
+```
+
+### Load MisigDB gene sets
+
+```{r}
+# hallmark_genes <- clusterProfiler::read.gmt("/home/caterina/data/analysis/GMTfiles/h.all.v6.2.entrez.gmt")
+# cannonicalPathway_genes <- clusterProfiler::read.gmt("/home/caterina/data/analysis/GMTfiles/c2.cp.v6.2.entrez.gmt")
+# immuno_genes <- clusterProfiler::read.gmt("/home/caterina/data/analysis/GMTfiles/c7.all.v6.2.entrez.gmt")
+# motifs <- clusterProfiler::read.gmt("/home/caterina/data/analysis/GMTfiles/c3.all.v6.2.entrez.gmt")
+```
+
+### Sample Annotation 
+
+```{r}
+# sample_table <- read.csv("~/data/analysis/sample_table_cispt_ATAC.csv", sep=";")
+# sample_table <- sample_table[1:16, 1:5]
+# rownames(sample_table) <- sample_table$ID
+# sample_table$Sample <- paste0("Sample_", sample_table$ID)
+```
+
+## Format sample table
+
+```{r colour definitions}
+# sample_table$Cell_type <- factor(sample_table$Cell_type,
+#                                    levels = c("BxPC3", "Jurkat"))
+# sample_table$Time <- factor(sample_table$Time, 
+#                            levels = c("6h"))
+# sample_table$Condition <- factor(sample_table$Condition, levels = c("BxPC3_Ctrl_6h", "BxPC3_Cispt_6h", "Jurkat_Ctrl_6h", "Jurkat_Cispt_6h"))
+# 
+# sample_table$Sample <- factor(sample_table$Sample, levels = c("Sample_18338", "Sample_18339", "Sample_18340", "Sample_18341", "Sample_18342", "Sample_18343", "Sample_18344", "Sample_18345", "Sample_18346", "Sample_18347", "Sample_18348", "Sample_18349", "Sample_18350", "Sample_18351", "Sample_18352", "Sample_18353"))
+#  
+# plot_order <- "Condition"
+```
+
+### Colour scheme customization
+
+```{r}
+# col_Cell_type <- c("#719b11", "#d9631e")
+# names(col_Cell_type) <- c("BxPC3", "Jurkat") 
+# 
+# col_Condition = c("#91c322", "#2d511d", "#f2c46d", "#bf1e0f")
+# names(col_Condition) <- c("BxPC3_Ctrl_6h", "BxPC3_Cispt_6h", "Jurkat_Ctrl_6h", "Jurkat_Cispt_6h")
+# 
+# ann_colors <- list(Cell_type = col_Cell_type, 
+#                   Condition = col_Condition)
+```
+
+###QC of aligned bulk ATAC-seq reads
+
+#### Chromosome coverage
+
+```{r,fig.height=30,fig.width=10}
+# plotList <- list()
+# 
+# for(i in 1:length(sample_table$ID)){
+#   message(dir(path=bamFilePath, pattern = ".final.bam$")[i])
+#   sortedBAM <- dir(path=bamFilePath, pattern = ".final.bam$",full.names = TRUE)[i]
+#   sample <- paste(strsplit(dir(path=bamFilePath, pattern = ".final.bam$")[i],".final.bam")[[1]])
+#   
+#   tmp <- idxstatsBam(sortedBAM)
+#   tmp <- tmp[grepl("chr",tmp$seqnames),]
+#   
+#   plotList[[i]] <- ggplot(tmp, aes(seqnames, mapped)) + 
+#     geom_bar(stat = "identity", fill="#A9DDD9") + 
+#     coord_flip()+
+#     scale_y_continuous()+
+#     xlab("")+
+#     ylab("mapped reads")+
+#     ggtitle(sample)+
+#     theme_bw()
+# }
+# 
+# plot_grid(plotlist = plotList,ncol=3)
+```
+
+### Insert size
+
+```{r,fig.height=24,fig.width=12}
+# plotList <- list()
+# 
+# for(i in 1:length(sample_table$ID)){
+#   message(dir(path=bamFilePath, pattern = ".final_openRegions.bam$")[i])
+#   sortedBAM <- dir(path=bamFilePath, pattern = ".final_openRegions.bam$",full.names = TRUE)[i]
+#   sample <- paste(strsplit(dir(path=bamFilePath, pattern = ".final_openRegions.bam$")[i],"\\.")[[1]][1],sep="")
+#   
+#   atacReads <- readGAlignmentPairs(sortedBAM, 
+#                                    param = ScanBamParam(mapqFilter = 1,
+#                                                         flag = scanBamFlag(isPaired = TRUE, isProperPair = TRUE), 
+#                                                         what = c("qname", 
+#                                                                  "mapq", 
+#                                                                  "isize")))
+#   
+#   atacReads_read1 <- GenomicAlignments::first(atacReads)
+#   insertSizes <- abs(elementMetadata(atacReads_read1)$isize)
+#   
+#   inserts <- table(insertSizes) %>% 
+#     data.frame %>% 
+#     mutate(insertSizes = as.numeric(as.vector(insertSizes)),
+#            Freq = as.numeric(as.vector(Freq)))
+#   
+#   plotList[[i]] <- ggplot(inserts, aes(x = insertSizes, y = Freq)) + 
+#     geom_line()+ 
+#     geom_vline(xintercept = c(180, 247), colour = "red") + 
+#     geom_vline(xintercept = c(315, 437), colour = "darkblue") + 
+#     geom_vline(xintercept = c(100), colour = "darkgreen") + 
+#     ggtitle(sample)+
+#     theme_bw()
+# }
+# 
+# plot_grid(plotlist = plotList,ncol=2)
+```
+
+### Data Import, QC and Processing
+
+#### Import Peaks from bulk ATAC-seq
+
+```{r}
+# # Import the bed files and produce object with counts per peak/gap
+# individualPeaks <- importBEDpeaks(pattern = "[[:digit:]]_peaks.narrowPeak", path = bedFilePath)
+# 
+# # summarize the individual peaks into a consensus peak annotation
+# peakSummary <- unionPeaks(individualPeaks)
+# 
+# # exclude blacklisted regions
+# # dowload here: https://sites.google.com/site/anshulkundaje/projects/blacklists
+# blacklistedRegions <- import.bed(paste(analysisPath,"hg38-blacklist.v2.bed.gz",sep="/"))  
+# PeaksBlacklisted <- countOverlaps(subject = blacklistedRegions,
+#                                   query = peakSummary) != 0
+# 
+# table(PeaksBlacklisted)
+# 
+# peakSummary <- peakSummary[!PeaksBlacklisted]
+# 
+# # define gaps between peaks
+# gapSummary <- gaps(peakSummary)
+# GapsBlacklisted <- countOverlaps(subject = blacklistedRegions,
+#                                  query = gapSummary) != 0
+# table(GapsBlacklisted)
+# gapSummary <- gapSummary[!GapsBlacklisted]
+# ```
+# 
+# ```{r}
+# ### Dataframe of peakPresence
+# peakSummary.df <- as.data.frame(peakSummary@elementMetadata)
+# rownames(peakSummary.df)<- peakSummary@ranges@NAMES
+# colnames(peakSummary.df)<- unlist(lapply(strsplit(colnames(peakSummary.df),split ="_peaks"), function(x) x[[1]]))
+```
+
+##### Peak QC
+
+###### Number of detected peaks per sample
+
+```{r, fig.height=10, fig.width=12}
+# df <- data.frame(detected_peaks=colSums(peakSummary.df))
+# idx <- match(rownames(df),sample_table$sample)
+# df$group <- sample_table$Group[idx]
+# 
+# tbl <- tableGrob(df,
+#                  theme=ttheme_minimal())
+# 
+# p1 <- ggplot(data.frame(detected_peaks=colSums(peakSummary.df),
+#                   sample=colnames(peakSummary.df)), 
+#        aes(y=detected_peaks,x=sample))+
+#   geom_point()+
+#   scale_y_continuous()+
+#   theme_classic()+
+#   theme(axis.text.x = element_text(size=8, angle = 45, hjust = 1))
+# 
+# grid.arrange(p1, tbl,
+#              nrow=1,
+#              as.table=TRUE)
+```
+
+###### Histogram on peak width
+
+```{r, warning=FALSE}
+# ggplot(data.frame(peakSummary@ranges), aes(width)) + 
+#   geom_histogram(aes(y=..count..),binwidth = 10,fill="#A9DDD9")+
+#   scale_x_continuous(limits=c(0,1000),breaks=c(0,200,500,1000))+
+#   geom_text(aes(900, 200, label = paste(sum(data.frame(peakSummary@ranges)$width>1000),">",sep=""), 
+#                 vjust = -0.5), col = "black")+
+#   theme_classic()
+```
+
+### Import Counts
+
+```{r,warning=FALSE}
+# # count reads from bam files in peak regions
+# countsPerPeak <- peakCountTable(peaks = peakSummary, 
+#                                    path = bamFilePath, 
+#                                    pattern = ".final.bam$")
+# #write peak counts into data frame
+# countsPerPeak.df <- as.data.frame(assay(countsPerPeak))
+```
+
+```{r,warning=FALSE}
+# # count reads from bam files in gap regions
+# countsPerGap <- peakCountTable(peaks = gapSummary, 
+#                                path = bamFilePath, 
+#                                pattern = ".final.bam$")
+# 
+# #write gap counts into data frame
+# countsPerGap.df <- as.data.frame(assay(countsPerGap))
+```
+
+##### QC 
+
+```{r}
+# # Count Statistics
+# totalPeakLength <- sum(as.numeric(width(peakSummary)))
+# totalPeakNumber <- length(peakSummary)
+# meanPeakLength <- round(totalPeakLength/totalPeakNumber,3)
+# totalPeakReads <- colSums(countsPerPeak.df)
+# meanReadsperPeak <- round(totalPeakReads/totalPeakNumber,3)
+# PeakReadsperBase <- totalPeakReads/totalPeakLength
+# 
+# # Gap statistics
+# totalGapLength <- sum(as.numeric(width(gapSummary)))
+# totalGapNumber <- length(gapSummary)
+# meanGapLength <- round(totalGapLength/totalGapNumber,3)
+# totalGapReads <- colSums(assay(countsPerGap))
+# meanReadsperGap <- round(totalGapReads/totalGapNumber,3)
+# GapReadsperBase <- totalGapReads/totalGapLength
+# 
+# summary.stats <- data.frame("totalPeakLength"=totalPeakLength,
+#                            "totalGapLength"=totalGapLength,
+#                             "totalPeakNumber"=totalPeakNumber,
+#                             "totalReads" = totalPeakReads+totalGapReads,
+#                             "totalPeakReads" = totalPeakReads,
+#                             "totalGapReads" = totalGapReads,
+#                             "meanReadsperPeak"= meanReadsperPeak,
+#                             "meanReadsperGap" = meanReadsperGap,
+#                             "PeakReadsperBase"=round(PeakReadsperBase,3),
+#                             "GapReadsperBase"= round(GapReadsperBase,3),
+#                             "CoverageRatio" = round(PeakReadsperBase/GapReadsperBase,3))
+# 
+# idx <- match(rownames(summary.stats), sample_table$Sample)
+# summary.stats$Time <- sample_table$Time[idx]
+# summary.stats$Condition <- sample_table$Condition[idx]
+# summary.stats$Cell_type <- sample_table$Cell_type[idx]
+# 
+# summary.stats
+```
+
+```{r,fig.width=24,fig.height=6}
+# tmp <- melt(countsPerPeak.df)
+# idx <- match(tmp$variable,sample_table$Sample)
+# tmp$Condition <- sample_table$Condition[idx]
+# 
+# p1 <- ggplot(tmp, aes(x= variable, y= value+1, fill= Condition))+
+#   geom_boxplot() +
+#   scale_y_log10()+
+#   ylab("log10(Count+1)")+
+#   xlab("") +
+#   theme_classic()+
+#   theme(axis.text.x = element_text(size=8, angle = 45, hjust = 1),
+#         plot.title = element_text(size = 8, face = "bold"))
+# 
+# p2 <- ggplot(summary.stats, aes(x= Condition, y= totalPeakReads,
+#                                 fill=Condition))+
+#   geom_boxplot() +
+#   geom_jitter(aes(shape=Cell_type)) +
+#   ylab("Total Peak Counts")+
+#   xlab("") +
+#   theme_classic()+
+#   theme(axis.text.x = element_text(size=8, angle = 45, hjust = 1),
+#         plot.title = element_text(size = 8, face = "bold"))
+# 
+# # visualize the ratio of reads in peaks and in gaps
+# p3 <- ggplot(summary.stats, aes(x = Condition, y = CoverageRatio, fill=Condition)) +
+#   geom_boxplot() +
+#   geom_jitter(aes(shape=Cell_type)) +
+#   ylab("Reads in Peaks/Reads in Gaps")+
+#   xlab("") +
+#   theme_classic()+
+#   theme(axis.text.x = element_text(size=8, angle = 45, hjust = 1),
+#         plot.title = element_text(size = 8, face = "bold"))
+# 
+# plot_grid(p1, p2, p3, ncol=2, rel_widths = c(2.3,1))
+```
+
+##### Histogram of rowSums
+
+```{r,fig.height=4,fig.width=8, warning=FALSE}
+# countStats <- data.frame(row.names=rownames(countsPerPeak.df),
+#                          mean=rowMeans(countsPerPeak.df),
+#                          sum=rowSums(countsPerPeak.df))
+# 
+# p1 <-ggplot(countStats, aes(mean)) + 
+#   geom_histogram(binwidth = 1, fill= "#A9DDD9")+
+#   scale_x_continuous(limits=c(0,500))+
+#   geom_text(aes(450, 1000, label = paste(sum(countStats$mean>500),">",sep=""), vjust = -0.5), col = "black")+
+#   theme_classic()
+# 
+# p2 <-ggplot(countStats, aes(sum)) + 
+#   geom_histogram(binwidth = 10, fill= "#A9DDD9")+
+#   scale_x_continuous(limits=c(0,5000))+
+#   geom_text(aes(4950, 200, label = paste(sum(countStats$sum>5000),">",sep=""), vjust = -0.5), col = "black")+
+#   geom_vline(xintercept=10)+
+#   theme_classic()
+# 
+# plot_grid(p1, p2, labels=list("Mean","Sum"), 
+#           label_x = 0.5, label_y = 0.9, hjust = -0.5, vjust = -0.5)
+```
+
+##### Correlation of peak counts 
+
+```{r,warning=FALSE ,fig.width=16,fig.height=12}
+# countCor <- cor(countsPerPeak.df)
+# 
+# corBreaks <- c(0,seq(0.8,1,by = 0.01))
+# 
+# pheatmap(countCor,
+#          main="Sample Correlation based on unnormalized counts per peaks",
+#          show_rownames = T,
+#          fontsize = 10,
+#          display_numbers=TRUE,
+#          color = colorRampPalette(rev(brewer.pal(n = length(corBreaks), name = "RdYlBu")))(length(corBreaks)),
+#          breaks = corBreaks)
+```
+
+### Filter Peaks
+
+```{r}
+# peaks2keep <- rownames(countsPerPeak.df[rowMax(as.matrix(countsPerPeak.df))>20,])
+# length(peaks2keep)
+# 
+# # filter peaks
+# peakSummary.filt <- peakSummary[peaks2keep]
+# peakSummary.filt.df <- peakSummary.df[rownames(peakSummary.df) %in% peaks2keep,]
+# 
+# # filter counts
+# countsPerPeak.filt.df <- countsPerPeak.df[peaks2keep,]
+```
+
+### Peak Annotation - ChIPseeker
+
+We can use the chipseeker library to identify genes closest to our regions and to give us simple summaries and visualisations of this annotation.
+
+We use the gene models from TxDb.Hsapiens.UCSC.hg38.knownGene and supply this to ChIPseeker packages annotatePeak function.
+
+#### Genomic distribution (peakSummary.filt e countsPerpeak.filt.df)
+
+```{r, fig.height=16,fig.width=8}
+# peakSummary.filt$sum <- as.vector(rowSums(countsPerPeak.filt.df))
+# covplot(peakSummary.filt, weightCol="sum",title = "ATAC peaks over Chromosomes")
+```
+
+#### Relative localization to nearest gene
+
+```{r,warning=FALSE}
+# # complete peak set
+# peakAnnotation <- annotatePeak(peakSummary, TxDb = TxDb.Hsapiens.UCSC.hg38.knownGene, level="gene")
+# peakAnnotation.df <- as.data.frame(as.GRanges(peakAnnotation))
+# 
+# # filtered peak set
+# peakAnnotation.filt <- annotatePeak(peakSummary.filt, TxDb = TxDb.Hsapiens.UCSC.hg38.knownGene, level="gene")
+# peakAnnotation.filt.df <- as.data.frame(as.GRanges(peakAnnotation.filt))
+```
+
+##### PieChart {.tabset .tabset-fade}
+
+###### All peaks
+
+```{r}
+# plotAnnoPie(peakAnnotation)
+```
+
+###### Filtered peaks
+
+```{r}
+# plotAnnoPie(peakAnnotation.filt)
+```
+
+##### VennPie {.tabset .tabset-fade}
+
+###### All peaks
+
+```{r}
+# vennpie(peakAnnotation)
+```
+
+###### Filtered peaks
+
+```{r}
+# vennpie(peakAnnotation.filt)
+```
+
+##### Distance to TSS {.tabset .tabset-fade}
+
+###### All peaks
+
+```{r, fig.height=2, fig.width=8}
+# plotDistToTSS(peakAnnotation,title = "Distribution of ATAC peaks relative to TSS")
+```
+
+###### Filtered peaks
+
+```{r, fig.height=2, fig.width=8}
+# plotDistToTSS(peakAnnotation.filt,title = "Distribution of ATAC peaks relative to TSS")
+```
+
+###### Histogram
+
+```{r, fig.width=12, fig.height=6, warning=FALSE}
+# p1 <- ggplot(data=peakAnnotation.df, aes(peakAnnotation.df$distanceToTSS)) + 
+#   geom_histogram(aes(y=..count..), colour="black", fill="#FF6666", binwidth = 10)+
+#   scale_x_continuous(limits=c(-1000,1000))+
+#   scale_y_continuous(limits=c(0,1000), oob = scales::squish)+
+#   geom_text(aes(100, 800, label=paste(">",sum(peakAnnotation.df$distanceToTSS==0),sep=""), vjust = -0.5), col="red")+
+#   labs(x="Distance to TSS", y="Count")+
+#   theme_bw()
+# 
+# p2 <- ggplot(data=peakAnnotation.filt.df, aes(peakAnnotation.filt.df$distanceToTSS)) + 
+#   geom_histogram(aes(y=..count..), colour="black", fill="#FF6666", binwidth = 10)+
+#   scale_x_continuous(limits=c(-1000,1000))+
+#   scale_y_continuous(limits=c(0,1000), oob = scales::squish)+
+#   geom_text(aes(100, 800, label=paste(">",sum(peakAnnotation.filt.df$distanceToTSS==0),sep=""), vjust = -0.5), col="red")+
+#   labs(x="Distance to TSS", y="Count")+
+#   theme_bw()
+# 
+# plot_grid(p1, p2, labels=list("All peaks","Filtered peaks"),ncol=1,
+#           label_x = 0.8, label_y = 0.8, hjust = -0.5, vjust = -0.5)
+```
+
+#### Add gene symbol to peak annotation
+
+The peak annotation contains entrez IDs, which are very hard to read. Thus, we add gene symbols to the annotation using the ensembl biomart data base (http://www.ensembl.org/). 
+
+```{r}
+# # Access ensembl data base and download relevant information:
+# 
+# ensembl <- useMart("ensembl",dataset="hsapiens_gene_ensembl")
+# 
+# bm <- getBM(attributes = c("entrezgene_id",
+#                            "external_gene_name", 
+#                           "description", 
+#                            "gene_biotype"),
+#             mart = ensembl)
+# 
+# IDindex <- match(peakAnnotation.df$geneId, bm$entrezgene_id)
+# 
+# peakAnnotation.df$symbol <- bm$external_gene_name[IDindex]
+# peakAnnotation.df$description <- bm$description[IDindex]
+# peakAnnotation.df$type <- bm$gene_biotype[IDindex]
+# 
+# IDindex <- match(peakAnnotation.filt.df$geneId, bm$entrezgene_id)
+# 
+# peakAnnotation.filt.df$symbol <- bm$external_gene_name[IDindex]
+# peakAnnotation.filt.df$description <- bm$description[IDindex]
+# peakAnnotation.filt.df$type <- bm$gene_biotype[IDindex]
+```
+
+### DESeq2 analysis of peak counts
+
+#### DESeq2 object
+
+```{r}
+# # produce DESeq data set
+# dds <- DESeqDataSetFromMatrix(countData = countsPerPeak.filt.df,
+#                               colData = sample_table,
+#                               design = ~ Condition) # change the design
+```
+
+#### Calculate DESeq2 Statistics
+
+```{r}
+# dds <- DESeq(dds,quiet = FALSE)
+```
+
+#### Normalized count table
+
+```{r}
+# #write table of normalized counts
+# norm <- as.data.frame(counts(dds, normalized=T))
+# identical(rownames(norm), rownames(peakAnnotation.filt.df))
+# norm_anno <- norm
+# norm_anno$peakid <- row.names(norm_anno)
+# 
+# norm_anno <- cbind(norm_anno,peakAnnotation.filt.df[,c(1:3,23:33)])
+# 
+# #write.csv(norm_anno, "norm_anno_ATAC_revised.csv")
+```
+
+#### Variance Stabilization
+
+```{r}
+# dds_vst <- vst(dds, blind = FALSE)
+# 
+# norm_vst <- as.matrix(assay(dds_vst))
+# norm_vst <- as.data.frame(norm_vst)
+# identical(rownames(norm_vst),rownames(peakAnnotation.filt.df))
+# 
+# norm_anno_vst <- cbind(norm_vst,peakAnnotation.filt.df[,c(1:3,23:33)])
+# norm_anno_vst$peakid <- row.names(norm_anno_vst)
+```
+
+#### Principal Component Analysis (Fig. 6 supplement 2 C)
+
+```{r, fig.height=6, fig.width=14}
+p1 <- plotPCA(pca_input = dds_vst,
+              ntop="all", 
+              xPC=1, 
+              yPC=2,
+              point_size=5,
+              title="",
+              color="Condition",
+              anno_color=col_Condition)
+
+p2 <- plotPCA(pca_input = dds_vst,
+              ntop="all", 
+              xPC=2, 
+              yPC=3,
+              point_size=5,
+              title="",
+              color="Condition",
+              anno_color=col_Condition)
+
+plot(p2)
+```
+
+# Define relevant comparisons
+
+```{r}
+# comparison_table<-data.frame(comparison = c("BxPC3_Cispt_6h","Jurkat_Cispt_6h", "Jurkat_Ctrl_6h"),
+#                              control = c("BxPC3_Ctrl_6h","Jurkat_Ctrl_6h", "BxPC3_Ctrl_6h"))
+```
+
+# Perform Differential Expression Testing
+
+```{r}
+# DEresults <- DEAnalysis(condition = "Condition",
+#                         alpha=0.05 ,
+#                         lfcThreshold= 0,
+#                         sigFC = 1,
+#                         multiple_testing="none",
+#                         shrinkage = TRUE,
+#                         shrinkType="normal")
+```
+
+### Summary of DARs (Fig. 6 supplement 2 D)
+
+```{r}
+#all DARs
+
+DEcounts <- NULL
+
+for(i in 1:nrow(comparison_table)){
+  tmp <- unlist(DEresults[[1+i]]@Number_DE_genes)
+  DEcounts <- rbind(DEcounts, tmp)
+}
+
+rownames(DEcounts) <- names(DEresults)[-1]
+
+DEcounts
+
+```
+
+### DAR-associated genes
+
+```{r}
+B_UP <- uDEGup("BxPC3_Cispt_6h_vs_BxPC3_Ctrl_6h")
+
+J_UP <- uDEGup("Jurkat_Cispt_6h_vs_Jurkat_Ctrl_6h")
+
+B_DOWN <- uDEGdown("BxPC3_Cispt_6h_vs_BxPC3_Ctrl_6h")
+
+J_DOWN <- uDEGdown("Jurkat_Cispt_6h_vs_Jurkat_Ctrl_6h")
+
+combined_input <- list(B_UP = B_UP,
+                       J_UP = J_UP,
+                       B_DOWN = B_DOWN,
+                       J_DOWN = J_DOWN)
+```
+
+### Get DAR-associated gene groups
+
+```{r}
+common_UP <- intersect(B_UP, J_UP)
+common_UP_df <- as.data.frame(common_UP)
+
+common_DOWN <- intersect(B_DOWN, J_DOWN)
+common_DOWN_df <- as.data.frame(common_DOWN)
+
+B_specific_UP <- setdiff(B_UP, common_UP)
+B_specific_UP_df <- as.data.frame(B_specific_UP)
+
+J_specific_UP <- setdiff(J_UP, common_UP)
+J_specific_UP_df <- as.data.frame(J_specific_UP)
+
+B_specific_DOWN <- setdiff(B_DOWN, common_DOWN)
+B_specific_DOWN_df <- as.data.frame(B_specific_DOWN)
+
+J_specific_DOWN <- setdiff(J_DOWN, common_DOWN)
+J_specific_DOWN_df <- as.data.frame(J_specific_DOWN)
+
+DE_groups <- list(common_UP=common_UP, common_DOWN=common_DOWN, B_specific_UP=B_specific_UP, B_specific_DOWN=B_specific_DOWN, J_specific_UP=J_specific_UP, J_specific_DOWN=J_specific_DOWN)
+```
+
+###Define universe and gene sets for subsequent GSEA analyses
+
+```{r}
+# define universe
+universe <- unique(as.character(norm_anno$symbol))
+# change symbols to ENTREZ IDs (necessary for ClusterProfiler)
+universe_Entrez <- bitr(universe, 
+                        fromType="SYMBOL", 
+                        toType="ENTREZID", 
+                        OrgDb="org.Hs.eg.db")$ENTREZID
+```
+
+```{r}
+gsea_list <- list()
+
+for (i in names(DE_groups)) {
+  
+  set <- DE_groups[[i]]
+  
+  enr <- enrichGO(set,
+                  OrgDb="org.Hs.eg.db",
+                  pAdjustMethod = "none",
+                  keyType = "SYMBOL",
+                  ont = "BP")
+  
+  gsea_list[[paste0(i)]] <- enr
+  
+}
+```
+
+```{r}
+enr_B_specific_UP <-gsea_list[["B_specific_UP"]]
+enr_J_specific_UP <- gsea_list[["J_specific_UP"]]
+  
+dotplot(enr_B_specific_UP, showCategory=30) + ggtitle("dotplot B specific UP")
+dotplot(enr_J_specific_UP, showCategory=30) + ggtitle("dotplot J specific UP")
+```
+
+#Get all DARs (coding in promoter regions, used for CoCena)
+
+```{r}
+ATAC_uDEG_cispt <- uDEG(comparisons=c("BxPC3_Cispt_6h_vs_BxPC3_Ctrl_6h", "Jurkat_Cispt_6h_vs_Jurkat_Ctrl_6h"))
+
+#saveRDS(ATAC_uDEG_cispt, "ATAC_uDEG_cispt.rds")
+```
+
+##Export top 1000 var DARs
+
+```{r}
+ATAC_upeaks_cispt <- uDAR(comparisons=c("BxPC3_Cispt_6h_vs_BxPC3_Ctrl_6h", "Jurkat_Cispt_6h_vs_Jurkat_Ctrl_6h"))
+norm_anno_vst_upeaks <- norm_anno_vst[norm_anno_vst$peakid %in% ATAC_upeaks_cispt, ]
+norm_anno_vst_upeaks$var <- rowVars(norm_anno_vst_upeaks[ ,1:16])
+norm_anno_vst_upeaks <- arrange(norm_anno_vst_upeaks, desc(var))
+norm_anno_vst_upeaks <- norm_anno_vst_upeaks[ !duplicated(norm_anno_vst_upeaks$symbol), ]
+norm_anno_vst_upeaks <- norm_anno_vst_upeaks[1:1000,]
+ATAC_uDEG_topK_cispt <- unique(c(norm_anno_vst_upeaks$symbol))
+
+#saveRDS(ATAC_uDEG_topK_cispt, "ATAC_uDEG_topK_cispt.rds")    
+```
+
+# Session Info
+```{r}
+info <- sessionInfo()
+
+info
+```

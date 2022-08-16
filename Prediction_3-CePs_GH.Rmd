@@ -1,0 +1,687 @@
+---
+title: "Prediction_3-CePs.Rmd"
+author: "Caterina Carraro"
+date: "080822"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Load environment
+
+```{r}
+load("/home/caterina/data/080822_Prediction_3-CePs_GH.RData")
+```
+
+# Load packages
+
+```{r}
+library(dplyr)
+library(reshape2)
+library(ggplot2)
+library(GSVA)
+library(ggsci)
+library(metaMA)
+library(dplyr)
+library(glmnet)
+library(ROCR)
+library(Metrics)
+library(RColorBrewer)
+library(ggpubr)
+```
+
+# Upload HPA datasets and anno
+
+```{r}
+# load("/home/caterina/data/220622_predstart.RData")
+```
+
+# Generate signatures
+## Restrict the CvsC DEcall [(logFC>1; <-1), padj<0.01]
+
+```{r}
+# load("/home/caterina/data/3CPs_CvsC_DEresults.RData")
+# DEresults_CvsC <- DEdf
+# 
+# #Restrict the CvsC DEcall [(logFC>1; <-1), padj<0.01]
+# 
+# restricted <- subset(DEresults_CvsC, DEresults_CvsC$regulation %in% c("up", "down"))
+# restricted <- subset(restricted, restricted$log2FoldChange>1 | restricted$log2FoldChange< (-1))
+# restricted <- subset(restricted, restricted$padj<0.01)
+# 
+# #Get the restricted coding DE up and down in BxPC-3
+# 
+# Controls_resuDEG_BDOWN <- subset(restricted, restricted$regulation %in% c("up"))
+# Controls_resuDEG_BDOWN <- subset(Controls_resuDEG_BDOWN, GENETYPE=='protein_coding') 
+# Controls_resuDEG_BDOWN <- unique(Controls_resuDEG_BDOWN$SYMBOL)
+#  
+# Controls_resuDEG_BUP <- subset(restricted, restricted$regulation %in% c("down"))
+# Controls_resuDEG_BUP <- subset(Controls_resuDEG_BUP, GENETYPE=='protein_coding') 
+# Controls_resuDEG_BUP <- unique(Controls_resuDEG_BUP$SYMBOL)
+```
+
+## Prediction signature
+
+```{r}
+# #CoCena-based 
+# 
+# load("/home/caterina/data/hCoCena/working_directory/data/genes_for_sign/tokeep_revised_topK.rda")
+# 
+# #Intersect CoCena with restricted CvsC DE
+# 
+# sign_restDE_CoCena_up50 <- intersect(Controls_resuDEG_BUP, q50genes_tokeep)
+# sign_restDE_CoCena_down50 <- intersect(Controls_resuDEG_BDOWN, q50genes_tokeep)
+# sign_restDE_CoCena_q50 <- list(sign_restDE_CoCena_up50, sign_restDE_CoCena_down50)
+# names(sign_restDE_CoCena_q50)[1] <- "up"
+# names(sign_restDE_CoCena_q50)[2] <- "down"
+```
+
+## Control signature topFC
+
+```{r}
+# #Take top logFC only
+# 
+# Controlstop_resuDEG_BUP <- subset(restricted, restricted$regulation %in% c("down"))
+# Controlstop_resuDEG_BUP <- subset(Controlstop_resuDEG_BUP, Controlstop_resuDEG_BUP$GENETYPE == "protein_coding")
+# Controlstop_resuDEG_BUP <- arrange(Controlstop_resuDEG_BUP, log2FoldChange)
+# #change based on signature size
+# Controlstop_resuDEG_BUP <- Controlstop_resuDEG_BUP[1:307, ]
+# Controlstop_resuDEG_BUP <- Controlstop_resuDEG_BUP$SYMBOL
+# 
+# Controlstop_resuDEG_BDOWN <- subset(restricted, restricted$regulation %in% c("up"))
+# Controlstop_resuDEG_BDOWN <- subset(Controlstop_resuDEG_BDOWN, Controlstop_resuDEG_BDOWN$GENETYPE == "protein_coding")
+# Controlstop_resuDEG_BDOWN <- arrange(Controlstop_resuDEG_BDOWN, desc(log2FoldChange))
+# #change based on signature size
+# Controlstop_resuDEG_BDOWN <- Controlstop_resuDEG_BDOWN[1:123, ]
+# Controlstop_resuDEG_BDOWN <- Controlstop_resuDEG_BDOWN$SYMBOL
+# 
+# #Create the top DE CvsC signature
+# 
+# sign_topDE_CvsC <- list(Controlstop_resuDEG_BUP, Controlstop_resuDEG_BDOWN)
+# names(sign_topDE_CvsC )[1] <- "up"
+# names(sign_topDE_CvsC )[2] <- "down"
+```
+
+# Perform GSVA
+
+## Cell lines
+
+```{r}
+gsva_cell_line_q50 <- as.data.frame(t(gsva(expr = as.matrix(cell_line_NX), gset.idx.list = sign_restDE_CoCena_q50, method = "gsva")))
+
+gsva_cell_line_q50$fill <- ifelse(gsva_cell_line_q50$up > gsva_cell_line_q50$down, "sens", "not-sens")
+
+gsva_cell_line_q50$sub <- gsva_cell_line_q50$up - gsva_cell_line_q50$down
+```
+
+#### Visualize the GSVA
+
+```{r}
+labels <- c("HEK 293", "A549", "A-431", "PC-3", "NTERA-2", "SH-SY5Y")
+gsva_cell_line_q50$label <- ifelse(rownames(gsva_cell_line_q50) %in% labels, rownames(gsva_cell_line_q50), " ")
+gsva_cell_line_q50$circle <- ifelse(rownames(gsva_cell_line_q50) %in% labels, "yes", "no")
+
+ggplot(gsva_cell_line_q50, aes(x=up, y=down, fill = sub, label=label, color=circle)) +
+  geom_point(size = 3, shape=21) + theme_bw() + theme(aspect.ratio = 1) + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  scale_fill_viridis_c() + ggtitle("GSVA analysis on cell lines - T") +       geom_text() + scale_color_manual(values = c("black", "red"))
+```
+
+### Evaluate prediction (Fig. 6 C)
+
+```{r}
+#corr_table <- read.csv("./PREDIZIONE.csv")
+gsva_cell_line_q50$cell.line <- rownames(gsva_cell_line_q50)
+corr_table_q50 <- merge(corr_table, gsva_cell_line_q50, by = "cell.line")
+corr_table_q50 <- corr_table_q50[, c(1,2,6)]
+rownames(corr_table_q50) <- corr_table_q50$cell.line
+corr_table_q50$cell.line <- NULL
+
+
+ggscatter(corr_table_q50, x = "sub", y = "viab",
+   color = "black", shape = 21, size = 3, 
+   add = "reg.line", label = rownames(corr_table_q50),
+   add.params = list(color = "blue", fill="#999999"), 
+   conf.int = TRUE, 
+   cor.coef = TRUE, 
+   cor.coeff.args = list(method = "pearson", label.x = 0.15, label.sep = "\n"), xlim = c(-0.4, 0.35), ylim = c(10, 100))
+```
+
+## Tumors
+
+```{r}
+gsva_tumors_q50 <- as.data.frame(t(gsva(expr = as.matrix(tumors), gset.idx.list = sign_restDE_CoCena_q50, method = "gsva")))
+
+gsva_tumors_q50$fill <- ifelse(gsva_tumors_q50$up > gsva_tumors_q50$down, "sens", "not-sens")
+
+gsva_tumors_q50$sub <- gsva_tumors_q50$up - gsva_tumors_q50$down
+```
+
+### Visualize the GSVA (Fig. 6 supplement 1 C)
+
+```{r}
+ggplot(gsva_tumors_q50, aes(x=up, y=down, color = sub)) +
+geom_point(size = 0.5) + 
+theme_bw() + theme(aspect.ratio = 1) + 
+geom_abline(slope = 1, intercept = -0.4, linetype = "dashed") +
+scale_color_viridis_c() + ggtitle("GSVA analysis on tumors")
+```
+
+#### Inspect sensitivity in tumor types (Fig. 6 D)
+
+```{r}
+#Annotate the gsva_tumor_q50
+ 
+anno_gsva_tumors_q50 <- gsva_tumors_q50
+anno_gsva_tumors_q50$Sample <- rownames(anno_gsva_tumors_q50)
+anno_gsva_tumors_q50 <- merge(anno_gsva_tumors_q50, anno_tumors, by = "Sample")
+
+median(anno_gsva_tumors_q50$sub)
+ 
+plot_order_violin <- anno_gsva_tumors_q50%>%group_by(Cancer)%>%summarise_each(funs(median), sub)
+plot_order_violin <- arrange(plot_order_violin, sub)
+plot_order_violin_vect <- as.vector(plot_order_violin$Cancer)
+anno_gsva_tumors_q50$Cancer <- factor(anno_gsva_tumors_q50$Cancer, levels = plot_order_violin_vect)
+
+ggplot(anno_gsva_tumors_q50, aes(x=Cancer, y=sub, fill=Cancer)) + 
+geom_violin() +
+stat_summary(fun.y=median, geom="point", size=2, color="red") +
+geom_abline(slope = 0, intercept = -0.004, linetype = "dashed") +
+scale_fill_viridis_d()
+```
+
+# Randomized control signature
+
+```{r}
+#Randomized signature for cell lines 
+set.seed(123)
+random_genes <- rownames(cell_line_NX)
+random_set_up <- sample(random_genes, size = 307, replace=FALSE)
+random_set_down <- sample(random_genes, size = 123, replace=FALSE)
+random_set <- list(random_set_up, random_set_down)
+names(random_set)[1] <- "up"
+names(random_set)[2] <- "down"
+
+#Randomized signature for tumors
+set.seed(1)
+random_genes_tumors <- rownames(tumors)
+random_set_tumors_up <- sample(random_genes_tumors, size = 307, replace=FALSE)
+random_set_tumors_down <- sample(random_genes_tumors, size = 123, replace=FALSE)
+random_set_tumors <- list(random_set_tumors_up, random_set_tumors_down)
+names(random_set_tumors)[1] <- "up"
+names(random_set_tumors)[2] <- "down"
+```
+
+# Perform GSVA
+
+## Cell lines
+
+```{r}
+gsva_cell_line_random <- as.data.frame(t(gsva(expr = as.matrix(cell_line_NX), gset.idx.list = random_set, method = "gsva")))
+
+gsva_cell_line_random$fill <- ifelse(gsva_cell_line_random$up > gsva_cell_line_random$down, "sens", "not-sens")
+
+gsva_cell_line_random$sub <- gsva_cell_line_random$up - gsva_cell_line_random$down
+```
+
+### Visualize the GSVA
+
+```{r}
+gsva_cell_line_random$label <- ifelse(rownames(gsva_cell_line_random) %in% labels, rownames(gsva_cell_line_random), " ")
+gsva_cell_line_random$circle <- ifelse(rownames(gsva_cell_line_random) %in% labels, "yes", "no")
+
+ggplot(gsva_cell_line_random, aes(x=up, y=down, fill = sub, label=label, color=circle)) +
+  geom_point(size = 3, shape=21) + theme_bw() + theme(aspect.ratio = 1) + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  scale_fill_viridis_c() + ggtitle("GSVA analysis on cell lines") +       geom_text() + scale_color_manual(values = c("black", "red"))
+```
+
+### Evaluate prediction (Fig. 6 supplement 1 D)
+
+```{r}
+gsva_cell_line_random$cell.line <- rownames(gsva_cell_line_random)
+corr_table_random <- corr_table
+corr_table_random <- merge(corr_table_random, gsva_cell_line_random, by = "cell.line")
+corr_table_random <- corr_table_random[, c(1,2,6)]
+rownames(corr_table_random) <- corr_table_random$cell.line
+corr_table_random$cell.line <- NULL
+
+
+ggscatter(corr_table_random, x = "sub", y = "viab",
+   color = "black", shape = 21, size = 3, 
+   add = "reg.line", label = rownames(corr_table_random),
+   add.params = list(color = "blue", fill = "lightgray"), 
+   conf.int = TRUE, 
+   cor.coef = TRUE, 
+   cor.coeff.args = list(method = "pearson", label.x = 0.15, label.sep = "\n"), xlim = c(-0.15, 0.2), ylim = c(10, 100))
+```
+
+# TopFC control signature
+
+# Perform GSVA
+
+## Cell lines
+
+```{r}
+gsva_cell_line_CvsCtop <- as.data.frame(t(gsva(expr = as.matrix(cell_line_NX), gset.idx.list = sign_topDE_CvsC, method = "gsva")))
+
+gsva_cell_line_CvsCtop$fill <- ifelse(gsva_cell_line_CvsCtop$up > gsva_cell_line_CvsCtop$down, "sens", "not-sens")
+
+gsva_cell_line_CvsCtop$sub <- gsva_cell_line_CvsCtop$up - gsva_cell_line_CvsCtop$down
+```
+### Visualize the GSVA
+
+```{r}
+gsva_cell_line_CvsCtop$label <- ifelse(rownames(gsva_cell_line_CvsCtop) %in% labels, rownames(gsva_cell_line_CvsCtop), " ")
+gsva_cell_line_CvsCtop$circle <- ifelse(rownames(gsva_cell_line_CvsCtop) %in% labels, "yes", "no")
+
+ggplot(gsva_cell_line_CvsCtop, aes(x=up, y=down, fill = sub, label=label, color=circle)) +
+  geom_point(size = 3, shape=21) + theme_bw() + theme(aspect.ratio = 1) + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  scale_fill_viridis_c() + ggtitle("GSVA analysis on cell lines") +       geom_text() + scale_color_manual(values = c("black", "red"))
+```
+
+### Evaluate prediction (Fig. 6 supplement 1 E)
+
+```{r}
+gsva_cell_line_CvsCtop$cell.line <- rownames(gsva_cell_line_CvsCtop)
+corr_table_topFC <- merge(corr_table, gsva_cell_line_CvsCtop, by = "cell.line")
+corr_table_topFC <- corr_table_topFC[, c(1,2,6)]
+rownames(corr_table_topFC) <- corr_table_topFC$cell.line
+corr_table_topFC$cell.line <- NULL
+
+
+ggscatter(corr_table_topFC, x = "sub", y = "viab",
+   color = "black", shape = 21, size = 3, 
+   add = "reg.line", label = rownames(corr_table_topFC),
+   add.params = list(color = "blue", fill = "lightgray"), 
+   conf.int = TRUE, 
+   cor.coef = TRUE, 
+   cor.coeff.args = list(method = "pearson", label.x = 0.15, label.sep = "\n"), xlim = c(-0.7, 0.3), ylim = c(0, 100))
+```
+
+# Classifier
+
+## All tumor types
+### Define training and test sets
+
+```{r}
+anno_ML_tumors <- anno_gsva_tumors_q50
+rownames(anno_ML_tumors) <- anno_ML_tumors$Sample
+
+#put anno_ML_tumors rows (Sample) in same order of tumors column for ML input
+anno_ML_tumors <- anno_ML_tumors[colnames(tumors),]
+
+set.seed(123)
+
+ts.samples <- sample(rownames(anno_ML_tumors), size = floor(0.8*nrow(anno_ML_tumors))) # 80% in training set
+vs.samples <- rownames(anno_ML_tumors)[!rownames(anno_ML_tumors) %in% ts.samples] # rest in validation / testing set
+```
+
+### Continuous classification
+
+```{r}
+ts <- tumors[,ts.samples]
+ts <- t(ts) # samples have to be in columns for glmnet
+vs <- tumors[,vs.samples]
+vs <- t(vs)
+ts.labels <- anno_ML_tumors[ts.samples, "sub"] # training labels
+vs.labels <- anno_ML_tumors[vs.samples, "sub"] # validation labels
+```
+
+### Training the model
+
+```{r}
+set.seed(123)
+
+model.temp <- cv.glmnet(x = ts, y = ts.labels, family = "gaussian", alpha = 1) # cv to find optimal s (penalty parameter lambda)
+
+# this is the actual prediction on the testing data
+pred.dist <- predict(model.temp, newx = vs, type = "response", prob = T, s = model.temp$lambda.min) # this gives probabilities for each sample to be
+```
+
+### Plot actual vs predicted values (Fig. 6 F)
+
+```{r}
+tumor.labels <- anno_ML_tumors[vs.samples, "Cancer"]
+
+result <- data.frame(actual = vs.labels, predicted = pred.dist, Cancer = tumor.labels)
+names(result) <-  c("actual", "predicted", "Cancer")
+
+plot_order <- result%>%group_by(Cancer)%>%summarise_each(funs(median), actual)
+
+plot_order <- arrange(plot_order, actual)
+plot_order_vect <- as.vector(plot_order$Cancer)
+result$Cancer <- factor(result$Cancer, levels = plot_order_vect)
+
+ggplot(result, aes(x = actual, y = predicted, color = Cancer)) + 
+  geom_point() +
+  theme_bw() + theme(aspect.ratio = 1) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red", size = 2) +
+  xlim(-0.5, 0.5)+
+  ylim(-0.5, 0.5)+
+  scale_color_viridis_d()
+
+cor.test(result$actual, result$predicted)
+```
+
+### For calculating the error of the model, you can use the root square mean error
+
+```{r}
+rmse(result$actual, result$predicted)
+```
+
+# Classifier signatureless (SL)
+
+We train and test the classifier excluding genes belonging to the signature
+
+## Assign continuous labels
+
+```{r}
+#employ same set of ts and vs samples (and their labels), but remove signature genes from transcriptomes
+sign_genes <- c(sign_restDE_CoCena_q50[["up"]], sign_restDE_CoCena_q50[["down"]])
+tumors_SL <- subset(tumors, !(rownames(tumors)%in%sign_genes))
+ts_SL <- tumors_SL[,ts.samples]
+ts_SL <- t(ts_SL) 
+
+vs_SL <- tumors_SL[,vs.samples]
+vs_SL <- t(vs_SL)
+```
+
+### Training the SL model
+
+```{r}
+set.seed(123)
+
+model.temp_SL <- cv.glmnet(x = ts_SL, y = ts.labels, family = "gaussian", alpha = 1) # cv to find optimal s (penalty parameter lambda)
+
+# this is the actual prediction on the testing data
+pred.dist_SL <- predict(model.temp_SL, newx = vs_SL, type = "response", prob = T, s = model.temp_SL$lambda.min) # this gives probabilities for each sample to be
+```
+
+### Plot actual vs SL predicted values (Fig. 6 supplement 1 F)
+
+```{r}
+tumor.labels <- anno_ML_tumors[vs.samples, "Cancer"]
+
+result_SL <- data.frame(actual = vs.labels, predicted = pred.dist_SL, Cancer = tumor.labels)
+names(result_SL) <-  c("actual", "predicted", "Cancer")
+
+plot_order_SL <- result_SL%>%group_by(Cancer)%>%summarise_each(funs(median), actual)
+
+plot_order_SL <- arrange(plot_order_SL, actual)
+plot_order_SL_vect <- as.vector(plot_order_SL$Cancer)
+result_SL$Cancer <- factor(result_SL$Cancer, levels = plot_order_SL_vect)
+
+ggplot(result_SL, aes(x = actual, y = predicted, color = Cancer)) + 
+  geom_point() +
+  theme_bw() + theme(aspect.ratio = 1) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red", size = 2) +
+  xlim(-0.5, 0.5)+
+  ylim(-0.5, 0.5)+
+  scale_color_viridis_d()
+
+cor.test(result_SL$actual, result_SL$predicted)
+```
+
+### For calculating the error of the model, you can use the root square mean error
+
+```{r}
+rmse(result_SL$actual, result_SL$predicted)
+```
+
+# Tumor type-specific classifier
+### Define training and test sets
+
+```{r}
+cancer_types <- unique(anno_ML_tumors$Cancer)
+specific_ML_tumors <- list()
+
+for (i in cancer_types){
+   
+   dataset <- subset(anno_ML_tumors, anno_ML_tumors$Cancer == i)
+   specific_ML_tumors[[paste0(i)]] <- dataset
+   
+}
+
+TTsets <- list()
+
+set.seed(123)
+
+for (i in cancer_types){
+
+dataset <- specific_ML_tumors[[i]]
+ts.samples <- sample(rownames(dataset), size = floor(0.8*nrow(dataset))) # 80% in training set
+vs.samples <- rownames(dataset)[!rownames(dataset) %in% ts.samples] # rest in validation / testing set
+TTsets[[i]][["ts.samples"]] <- ts.samples
+TTsets[[i]][["vs.samples"]] <- vs.samples
+
+}
+```
+
+### Continuous classification
+
+```{r}
+TTlabels <- list()
+TTglmnet_samples <- list()
+
+for (i in cancer_types){
+   
+ts.samples <- TTsets[[i]][["ts.samples"]]
+ts <- tumors[,ts.samples]
+ts <- t(ts) # samples have to be in columns for glmnet
+
+vs.samples <- TTsets[[i]][["vs.samples"]]
+vs <- tumors[,vs.samples]
+vs <- t(vs)
+ts.labels <- anno_ML_tumors[ts.samples, "sub"] # training labels
+vs.labels <- anno_ML_tumors[vs.samples, "sub"] # validation labels
+
+TTlabels[[i]][["ts.labels"]] <- ts.labels
+TTlabels[[i]][["vs.labels"]] <- vs.labels
+
+TTglmnet_samples[[i]][["ts"]] <- ts
+TTglmnet_samples[[i]][["vs"]] <- vs
+
+}
+```
+
+### Training the model
+
+```{r}
+set.seed(123)
+
+tumor_spec_pred <- list()
+
+for (i in cancer_types){
+
+ts <- TTglmnet_samples[[i]][["ts"]]
+ts.labels <- TTlabels[[i]][["ts.labels"]]
+
+model.temp <- cv.glmnet(x = ts, y = ts.labels, family = "gaussian", alpha = 1) # cv to find optimal s (penalty parameter lambda)
+
+vs <- TTglmnet_samples[[i]][["vs"]]
+# this is the actual prediction on the testing data
+pred.dist <- predict(model.temp, newx = vs, type = "response", prob = T, s = model.temp$lambda.min) # this gives probabilities for each sample to be
+
+tumor_spec_pred[[i]] <- pred.dist
+
+}
+```
+
+### Plot actual vs predicted values, calculate cor and RMSE (Fig. 6 supplement 2 A)
+
+```{r}
+for (i in cancer_types){
+
+vs.labels <- TTlabels[[i]][["vs.labels"]]
+pred.dist <- tumor_spec_pred[[i]]
+vs.samples <- TTsets[[i]][["vs.samples"]]
+tumor.labels <- anno_ML_tumors[vs.samples, "Cancer"]
+
+result <- data.frame(actual = vs.labels, predicted = pred.dist, Cancer = tumor.labels)
+names(result) <-  c("actual", "predicted", "Cancer")
+
+plot_order <- result%>%group_by(Cancer)%>%summarise_each(funs(median), actual)
+
+plot_order <- arrange(plot_order, actual)
+plot_order_vect <- as.vector(plot_order$Cancer)
+result$Cancer <- factor(result$Cancer, levels = plot_order_vect)
+
+prediction_plot <- ggplot(result, aes(x = actual, y = predicted, color = Cancer)) + 
+  geom_point() +
+  theme_bw() + theme(aspect.ratio = 1) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red", size = 2) +
+  xlim(-1, 1)+
+  ylim(-1, 1)+
+  scale_color_viridis_d()
+
+print(i)
+
+print(prediction_plot)
+
+print(cor.test(result$actual, result$predicted))
+
+print(rmse(result$actual, result$predicted))
+
+}
+```
+
+# Plot of THCG20 signature genes
+
+### Volcano Plot signature (Fig. 6 B)
+
+```{r}
+#Get signature genes
+T_sign_up <- sign_restDE_CoCena_up50
+T_sign_down <- sign_restDE_CoCena_down50
+sign_updown <- c(T_sign_up, T_sign_down)
+DF_sign_updown <- as.data.frame(sign_updown)
+
+#Subset for CvsC DE genes
+DF_CvsC <- DEresults_CvsC[, c(2,7,9,12,13)]
+DF_CvsC <- subset(DF_CvsC, DF_CvsC$regulation %in% c("up", "down"))
+
+#assign label to key genes
+labels <- c("HSPA5", "HERPUD1", "YOD1", "SCD", "ERCC6", "AUNIP", "FDFT1", "BNIP3", "TGFBI", "DDIT4", "FABP5", "STUB1", "SLFN11", "CYP3A5", "ADNP2")
+DF_CvsC$label <- ifelse(DF_CvsC$SYMBOL %in% labels, DF_CvsC$SYMBOL, " ")
+#change logFC sign (BxPC-3 vs HCT-15)
+DF_CvsC$log2FoldChange <- DF_CvsC$log2FoldChange*-1
+
+#assign color (grey DE non signature, red or blue DE in signature)
+DF_CvsC$color <- ifelse(DF_CvsC$SYMBOL %in% sign_updown, "color", "c_grey")
+DF_CvsC$color <- ifelse(DF_CvsC$regulation == "down" & DF_CvsC$color == "color", "b_red", DF_CvsC$color)
+DF_CvsC$color <- ifelse(DF_CvsC$regulation == "up" & DF_CvsC$color == "color", "a_blue", DF_CvsC$color)
+DF_CvsC <- DF_CvsC %>% group_by(color) %>% arrange(desc(color))
+DF_CvsC$color <- factor(DF_CvsC$color, levels=c("a_blue", "b_red", "c_grey"))
+
+ggplot(data=DF_CvsC, aes(x=log2FoldChange, y=-log10(padj), colour=color, label=label)) +
+      geom_point(alpha=0.5, size=1.75) +
+      scale_color_manual(values=c("cornflowerblue", "red", "grey"))+
+      geom_text(colour="black") +
+      xlab("log2(FoldChange)") +
+      ylab("-log10(padj)") +
+      ylim(0, 50) + 
+      xlim(-15, 15) + 
+      geom_vline(xintercept = 0, colour="black")+
+      geom_vline(xintercept = c(1, -1), colour="red")+
+      geom_hline(yintercept=-log(0.01, 10),colour="red")+
+      theme_bw()+
+      theme(aspect.ratio = 1)
+```
+
+### Signature enrichment
+
+#### GSEA dotplot for multiple comparisons (Fig. 6 supplement 1 B)
+
+```{r}
+dotplotGSEA_MC <- function(x,
+                        show=25,
+                        font.size=10,
+                        title.size=10,
+                        title.width=100){
+
+    ggplot(x, aes(x = Cluster, y = Description, color = pvalue)) +
+      geom_point(aes(size = Count)) +
+      scale_x_discrete(drop = FALSE) +
+      scale_colour_gradientn(colours=c('darkorange1',
+                                       '#FFFF0000',
+                                       '#FFFF0000'),
+                             limits=c(0,1),
+                             values   = c(0,0.05,0.2,1),
+                             breaks   = c(0.05,0.2,1),
+                             labels = format(c(0.05,0.2,1))) +
+      ylab(NULL) +
+      # ggtitle(paste(strwrap(unique(x$Enrichment), width=title.width), collapse = "\n"))+
+      theme_bw() +
+      theme(text = element_text(size=font.size),
+            plot.title = element_text(size=title.size), axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+  }
+```
+
+```{r}
+# load universe
+#load("/home/caterina/data/universe_Entrez.RData")
+
+sign_up_T_entrez <- bitr(sign_restDE_CoCena_up50, fromType = "SYMBOL", toType="ENTREZID", OrgDb="org.Hs.eg.db")$ENTREZID
+
+sign_up_GO <- enrichGO(gene = sign_up_T_entrez,
+          universe = universe_Entrez,
+          OrgDb = "org.Hs.eg.db",
+          ont = "BP",
+          pAdjustMethod = "none",
+          pvalueCutoff  = 1,
+          qvalueCutoff  = 1,
+          readable      = T)
+
+sign_down_T_entrez <- bitr(sign_restDE_CoCena_down50, fromType = "SYMBOL", toType="ENTREZID", OrgDb="org.Hs.eg.db")$ENTREZID
+
+sign_down_GO <- enrichGO(gene = sign_down_T_entrez,
+          universe = universe_Entrez,
+          OrgDb = "org.Hs.eg.db",
+          ont = "BP",
+          pAdjustMethod = "none",
+          pvalueCutoff  = 1,
+          qvalueCutoff  = 1,
+          readable      = T)
+
+#select top 50 Counts hits
+sign_down_GO_cluster <- sign_down_GO@result
+sign_down_GO_cluster <- sign_down_GO_cluster[1:50, ]
+
+sign_up_GO_cluster <- sign_up_GO@result
+sign_up_GO_cluster <- sign_up_GO_cluster[1:50, ]
+
+#isolate all top terms
+down_descr <- sign_down_GO_cluster$Description
+up_descr <- sign_up_GO_cluster$Description
+descr <- unique(c(down_descr, up_descr))
+
+#filter GO output for top terms
+up_GO_filtered <- subset(sign_up_GO, sign_up_GO$Description %in% descr)
+up_GO_filtered$Cluster <- "up"
+down_GO_filtered <- subset(sign_down_GO, sign_down_GO$Description %in% descr)
+down_GO_filtered$Cluster <- "down"
+
+#merge the filtered datasets and arrange by pval
+updown_GO_filtered <- rbind(up_GO_filtered, down_GO_filtered)
+updown_GO_filtered <- updown_GO_filtered %>% group_by(Cluster) %>% arrange(pvalue)
+updown_GO_filtered <- updown_GO_filtered %>% arrange(desc(Cluster))
+
+#skim out interesting GO terms, 10 per group
+selected_GO <- updown_GO_filtered[c(3,4,7,13,14,25,27,30,31,40,51,57,100,101,104,109,119,139,142,149,166),]
+selected_GO <- selected_GO$Description
+
+#further polish the dataset to be plotted for final GO
+updown_GO_filtered <- subset(updown_GO_filtered, updown_GO_filtered$Description %in% selected_GO)
+
+dotplotGSEA_MC(updown_GO_filtered)
+```
+
+# Session Info
+```{r}
+info <- sessionInfo()
+
+info
+```

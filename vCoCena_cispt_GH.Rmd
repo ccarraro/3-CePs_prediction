@@ -1,0 +1,599 @@
+---
+title: "Vertical_CoCena_cispt"
+output:
+html_document: default
+pdf_document: default
+editor_options: 
+chunk_output_type: inline
+---
+
+# Load environment
+
+```{r}
+load("/home/caterina/data/vCoCena/envs/110822_vCoCena_cispt_GH.RData")
+```
+
+## Setting up the working directory 
+
+**Parameter information**:
+
++ **working_directory**:
+
+String that defines the path to the folder from which you are working. The folder should have the following structure in order for the script to extract the necessary files correctly:
+    
+      working_directory/  
+    
+                  scripts/ (All CoCena² scripts)  
+                  data/ (count table(s))  
+                  reference_files/ (gmt files, TFcat file, etc.)  
+                  sample_info/ (metadata file(s)) 
+                  
+  
+```{r setting your working directory}
+# working_directory <- "/home/caterina/data/vCoCena/"
+```
+
++ **save_folder**:
+
+Please define a folder in which your results shall be saved using the 'name' variable. 
+The folder is created automatically, if it does not yet exist.
+  
+```{r, warning = FALSE}
+# source(paste0(working_directory,"scripts/", "init_envo.R"))
+# 
+# global_settings <- list()
+# global_settings[["save_folder"]] <- init_save_folder(name = "out_all_1")
+```
+
+## Defining Your Omics Layers:
+
+**information on required file structures**:
+
+  + **count files**:  
+  
+Input the name of the count file in .csv or .txt format (*path: working_directory/data/count_file*).
+All count tables must have a uniformly named column that contains the gene symbols.
+There should be one column for each sample und one column containing the gene names.
+Further non-numerical columns will be removed automatically, please make sure there are no other numerical columns
+besides those that contain the counts.
+Each row should represent the expression data of one gene..
+      
+  + **info datasets**:  
+  
+     Metadata file in .csv or .txt format (*path: working_directory/sample_info/info_Dataset*).
+     The file provides metadata of samples, samples will be grouped by variables defined in this file.  
+     Each row should correspond to one sample and each column should represent an information type (e.g age, sex, condition,...).
+     The naming of the column containing the sample IDs must be the same throughout all datasets!
+
+  + **TF_list_name**:  
+  
+     Input the name of the transcription factor file (*path: working_directory/reference_files/TF_file*).
+     The file structure should be the following:
+      + column-names: Taxon1 Taxon2 Type_of_gene
+      
+  + **GMT files**:  
+  
+     GMT: Gene Matrix Transposed file format (.gmt), see
+     [link](https://software.broadinstitute.org/cancer/software/gsea/wiki/index.php/Data_formats) for details.
+     Input the name of the representative GMT files (*path: working_directory/reference_files/gmtfile*). 
+
+
+**Parameter information**:
+                  
++ **layers**:
+
+Create a list entry for each of your datasets, name those entries "set1", "set2", ... .
+Each list entry should be set to a vector consisting of exactly two strings:
+  + first string: The name of the count file that belongs to this layer
+  + second string: The name of the annotation file, that belongs to this layer
+
+ALTERNATIVELY, if you already have the count and annotation tables in the environment, the layers can be initialized from those, thus saving them as files is not required. In this case, just give the object names as strings instead of the file names. The count object must be a data frame with sample names as columns and gene names as rows. There must be **no additional columns** other than those representing the counts per sample. The annotation object must also be a data frame, where row names are sample names that match the column names of the count object, and column names are information categories. 
+
++ **supplement**:
+  
+  A vector of five strings:
+  + first string: Name of your Transcription Factor file.
+  + second string: Name of your Hallmark file
+  + third string: Name of your GO file
+  + fourth string: Name of your KEGG file
+  + fifth string: Name of your Reactome file
+
++ **layers_names**:
+
+A vector of strings naming your data sets. The strings must be unique.
+Example: c("protein_coding", "lncRNA").
+This vector is needed for labelling your data in plots etc.
+
+## Define RNA uDEG for filtering
+
+```{r}
+# RNA_uDEG <- readRDS("/home/caterina/data/hCoCena/objects/RNA_uDEG_topK_cispt.rds")
+# RNA_uDEG <- as.data.frame(RNA_uDEG)
+# colnames(RNA_uDEG)[1] <- "SYMBOL"
+```
+
+## Define ATAC uDEG for filtering
+
+```{r}
+# ATAC_uDEG <- readRDS("/home/caterina/data/hCoCena/objects/ATAC_uDEG_topK_cispt.rds")
+# ATAC_uDEG <- as.data.frame(ATAC_uDEG)
+# colnames(ATAC_uDEG)[1] <- "SYMBOL"
+```
+
+### Set union of ATAC and RNA DE genes
+
+```{r}
+# input_DEGs <- unique(rbind(RNA_uDEG, ATAC_uDEG, by = "SYMBOL"))
+```
+
+### RNAseq
+
+```{r}
+# load("~/data/vCoCena/sample_info/sample_table_RNA_cispt.RData")
+# anno_R <- sample_table[,1:5]
+# anno_BxPC3_R <- anno_R[1:8,]
+# anno_Jurkat_R <- anno_R[9:16,]
+#   
+# #load batch-corrected rlog counts
+# load("/home/caterina/data/vCoCena/data/normanno_BC_RNA_cispt.RData")
+# counts_R <- norm_anno_BC
+# counts_R <- subset(counts_R, counts_R$GENETYPE == "protein_coding")
+# counts_R <- subset(counts_R, counts_R$SYMBOL %in% input_DEGs$SYMBOL) #subset for uDEG
+# counts_R <- counts_R[, 2:18]
+# 
+# counts_BxPC3_R <- counts_R[, c((1:8) ,17)]
+# counts_Jurkat_R <- counts_R[, 9:17]
+# 
+# counts_BxPC3_R$var <- rowVars(counts_BxPC3_R[ ,1:8])
+# counts_BxPC3_R <- arrange(counts_BxPC3_R, desc(var))       #remove duplicates with higher var
+# counts_BxPC3_R <- counts_BxPC3_R[ !duplicated(counts_BxPC3_R$SYMBOL), ]
+# counts_BxPC3_R <- drop_na(counts_BxPC3_R)                   #remove NA containing rows
+# rownames(counts_BxPC3_R) <- counts_BxPC3_R$SYMBOL
+# counts_BxPC3_R$SYMBOL <- NULL
+# counts_BxPC3_R$var <- NULL
+# 
+# counts_Jurkat_R$var <- rowVars(counts_Jurkat_R[ ,1:8])
+# counts_Jurkat_R <- arrange(counts_Jurkat_R, desc(var))
+# counts_Jurkat_R <- counts_Jurkat_R[ !duplicated(counts_Jurkat_R$SYMBOL), ]
+# counts_Jurkat_R <- drop_na(counts_Jurkat_R)
+# rownames(counts_Jurkat_R) <- counts_Jurkat_R$SYMBOL
+# counts_Jurkat_R$SYMBOL <- NULL
+# counts_Jurkat_R$var <- NULL
+# 
+# #merge back the two datasets
+# 
+# counts_R <- merge(counts_BxPC3_R, counts_Jurkat_R, by=0)
+# rownames(counts_R) <- counts_R[,1]
+# counts_R[,1] <- NULL
+```
+
+### ATACseq
+
+```{r}
+# load("~/data/vCoCena/sample_info/sample_table_ATAC_cispt.RData")
+# anno_A <- sample_table[,1:5]
+# anno_BxPC3_A <- anno_A[1:8,]
+# anno_Jurkat_A <- anno_A[9:16,]
+#   
+# load("/home/caterina/data/vCoCena/data/normanno_vst_ATAC_cispt.RData")
+# counts_A <- norm_anno_vst
+# counts_A <- subset(counts_A, counts_A$type == "protein_coding")
+# counts_A <- subset(counts_A, counts_A$symbol%in%input_DEGs$SYMBOL) # subset for input uDEG
+# counts_A <- subset(counts_A, counts_A$annotation %in% c("Promoter (<=1kb)", "Promoter (1-2kb)", "Promoter (2-3kb)"))#take only peaks in promoter regions
+# counts_A$symbol <- paste(counts_A$symbol, "_A")
+# counts_A <- counts_A[,c(1:16,28)]
+# 
+# counts_BxPC3_A <- counts_A[, c(1:8, 17)]
+# counts_Jurkat_A <- counts_A[, c(9:17)]
+# 
+# counts_BxPC3_A$var <- rowVars(counts_BxPC3_A[ ,1:8])
+# counts_BxPC3_A <- arrange(counts_BxPC3_A, desc(var))
+# counts_BxPC3_A <- counts_BxPC3_A[ !duplicated(counts_BxPC3_A$symbol), ]
+# counts_BxPC3_A <- drop_na(counts_BxPC3_A)           
+# rownames(counts_BxPC3_A) <- counts_BxPC3_A$symbol
+# counts_BxPC3_A$symbol <- NULL
+# counts_BxPC3_A$var <- NULL
+# names(counts_BxPC3_A) <- sub("Sample_", "", names(counts_BxPC3_A))
+# 
+# counts_Jurkat_A$var <- rowVars(counts_Jurkat_A[ ,1:8])
+# counts_Jurkat_A <- arrange(counts_Jurkat_A, desc(var))
+# counts_Jurkat_A <- counts_Jurkat_A[ !duplicated(counts_Jurkat_A$symbol), ]
+# counts_Jurkat_A <- drop_na(counts_Jurkat_A)
+# rownames(counts_Jurkat_A) <- counts_Jurkat_A$symbol
+# counts_Jurkat_A$symbol <- NULL
+# counts_Jurkat_A$var <- NULL
+# names(counts_Jurkat_A) <- sub("Sample_", "", names(counts_Jurkat_A))
+# 
+# #merge back the two datasets
+# 
+# counts_A <- merge(counts_BxPC3_A, counts_Jurkat_A, by=0)
+# rownames(counts_A) <- counts_A[,1]
+# counts_A[,1] <- NULL
+# 
+# #change colnames as in RNA layer (fittizio)
+# colnames(counts_A) <- c("18193", "18194", "18195", "18196", "18197", "18198", "18199", "18200", "18201", "18202", "18203", "18204", "18205", "18206", "18207", "18208")
+# rownames(anno_A) <- c("18193", "18194", "18195", "18196", "18197", "18198", "18199", "18200", "18201", "18202", "18203", "18204", "18205", "18206", "18207", "18208")
+# anno_A$ID <- rownames(anno_A)
+```
+
+```{r}
+# layers <- list(set1 = c("counts_R", "anno_R"),
+#               set2 = c("counts_A", "anno_A"))
+# 
+# supplement <- c("TFcat.txt", "h.all.v6.1.symbols.gmt", "c5.bp.v7.0.symbols.gmt", 
+#              "c2.cp.kegg.v7.0.symbols.gmt", "c2.cp.reactome.v7.0.symbols.gmt")
+# 
+# layers_names <- c("RNA", "ATAC")
+# 
+# layer_specific_outputs <- list()
+```
+
+## Installing and loading necessary packages:
+
+**Installation of packages**:
+
+Installing Packages is set to False (install parameter) to avoind re-installation with every run.
+Change to "TRUE" for installation.
+  
+```{r install required packages}
+# source(paste0(working_directory,"scripts/", "install_packages.R"))
+# source(paste0(working_directory,"scripts/", "install_bioconductor_packages.R"))
+# 
+# install_cran_packages(install = F)
+# install_bioconductor_packages(install = F)
+```
+
+**Loading of packages**:
+
+```{r load packages, message = FALSE}
+# library("BSgenome")
+# library("GenomicFeatures")
+# library("metaMA")
+# library("genefilter")
+# library("dplyr")
+# library("tidyr")
+# library("pheatmap")
+# library("viridis")
+# library("ggrepel")
+# 
+# source(paste0(working_directory,"scripts/", "load_libraries.R"))
+```
+## Define global settings:
+
+These settings are all layer independent.
+
+**global parameters**:
+
++ **organism**: 
+
+"mouse" and "human" are supported so far.
+  
++ **control**:
+  
+If you have no controls, all comparisons between the present conditions will be made relative to each other. If you do in fact have no control, please set this parameter to "none".
+  
+If you do have a control group, this control should be named **uniformly** throughout all annotation files. In this case, please set this parameter to your control naming (e.g. "control" or "healthy").
+  
++ **voi**:
+
+Variable of interest. Name of the column in the annotation data set which contains the grouping information for calculating group fold changes (GFCs), e.g. if one is interested in disease then the voi needs to be set to the column name containing disease information (e.g. "influenza" and "control") in the annotation data set. If you have controls, then this column must contain the control naming set above.
+  
++ **min_nodes_number_for_network**:
+
+Input the minimal number of nodes to constitute a co-expression network (=igraph component). For each network a layout is calculated, they are then merged to obtain one network plot, consisting of possibly several graph components. 
+  
++ **min_nodes_number_for_cluster**:
+  
+The minimal number of nodes to determine a cluster for the calculation of clusters in the network obtained by the set clustering algorithm. 
+  
++ **range_GFC**:
+
+Input the range of the group fold change (GFC), typical value is 2. In the presence of controls, the GFC is the mean expression fold change of each group within **voi** from the mean expression in the control. In the absence of controls, the group fold change will be the mean expression fold change of each group in **voi** from the mean of all mean expression across all groups in **voi**.
+  
++ **data_in_log**:
+
+A boolean whether or not your data has been logged to the base of 2.
+
+```{r global settings}
+global_settings[["organism"]] <- "human"
+
+global_settings[["control"]] <- "none"
+
+global_settings[["voi"]] <- "Condition"
+
+global_settings[["min_nodes_number_for_network"]] <- 15
+
+global_settings[["min_nodes_number_for_cluster"]] <- 15
+
+global_settings[["range_GFC"]] <- 2
+
+global_settings[["layout_algorithm"]] <-  "layout_with_fr" #"layout_with_fr" #"cytoscape"
+
+global_settings[["data_in_log"]] <- T
+```
+## Define layer-specific settings:
+
+These settings are all layer specific.
+
++ **top_var**:
+
+The top most variable entities (e.g. genes, proteins, lncRNAs, ...) to be considered. Very high numbers cause long run times. Common values are 5000 or 10000 (long run time and memory issues are possible on small machines with the latter). If set to 'all', all entities will be considered.
+  
++ **min_corr** and **range_cutoff_length**:
+
+To select entities that are to be used for the subsequent analysis, the optimal correlation coefficient cut-off needs to be determined. The cutoff range to be tested is defined by min. correlation limit (**min_corr**) specified below, up to the max. correlation found in data between entities, while the number of cut-offs tested is determined by **range_cutoff_length**. E.g. if min_corr = 0.5 and range_cutoff_length = 300, 300 cutoff-values between 0.5 and max(correlation_between_genes) will be tested. For bulk RNA data, 0.7 gives decent results.
+
++ **print_distribution_plots**:
+
+Boolean. Whether or not to print the distribution plots for all tested cut-offs to pdf files. The number of plots per data set will be equal to the **range_cutoff_length** parameter you have set.
+
+```{r set1 settings}
+source(paste0(working_directory,"scripts/", "set_layer_settings.R"))
+
+layer_settings <- list()
+
+layer_settings <- set_layer_settings(top_var = c(2000, 2000), # vector of top_var for your data sets (in order of your sets in "layers")
+                                     min_corr = rep(0.5, length(layers)), # vector of min_corr for your data sets (in order of your sets in "layers")
+                                     range_cutoff_length = rep(100, length(layers)), # vector of range_cutoff_length for your data sets (in order of your sets in "layers")
+                                     print_distribution_plots = rep(F, length(layers))) # vector of print_distribution_plots for your data sets (in order of your sets in "layers")
+```
+
+## Data import
+
+Assuming that the working directory, the folders it contains and the file names are all set correctly, all necessary data ist loaded automatically and structured in a list "data" and all supplementary data (TF list etc.) will be found in a list "supplementary_data".
+
+
++ **parameters**:
+
+  + **sep_counts**: Delimiter used in the count files.
+  + **sep_anno**: Delimiter used in the anotation files.
+  + **gene_symbol_col**: The name of the column in your count files that contains the gene symbols.
+  + **sample_col**: The name of the column in your annotation files that contains the sample names.
+  + **count_has_rn**: Boolean whether or not your count file has rownames.
+  + **anno_has_rn**: Boolean whether or not your annotation files have rownames.
+
+
+```{r data import}
+source(paste0(working_directory,"scripts/", "init_envo.R"))
+
+#One function to rule them all, One function to find them, One function to bring them all, and in the darkness bind them:
+data <- initialize_environment(sep_counts = "\t",
+                       sep_anno = "\t", 
+                       gene_symbol_col = rownames(),
+                       sample_col = "ID",
+                       count_has_rn = T,
+                       anno_has_rn = T)
+
+supplementary_data <- load_supplementary_data()
+```
+
+## Check distibution of data points:
+
+To check the distribution of data points in your data sets, run the following chunk. You can choose between boxplots and frequency distributions.
+If you have more than 200 samples in total, you might want to set the 'plot' parameter to F, this way, the plots are saved as PDFs but not plotted in this markdown.
+
+```{r data distribution plots, warning = FALSE}
+source(paste0(working_directory,"scripts/", "plot_data_distribution.R"))
+
+plot_sample_distributions(data_df = data, 
+                          plot_type = "boxplot",
+                          log_2 = F, 
+                          plot = T)
+```
+
+### Start from horizontally-merged layers
+
+```{r plot cluster heatmaps}
+integrated_R <- load("/home/caterina/data/hCoCena/objects/integrated_output_R_cispt_topK.RData")
+integrated_R <- integrated_output
+edgelist_R <- integrated_R[["combined_edgelist"]]
+GFC_R <- integrated_R[["GFC_all_layers"]]
+cluster_calc_R <- integrated_R[["cluster_calc"]]
+
+integrated_A <- load("/home/caterina/data/hCoCena/objects/integrated_output_A_cispt_topK.RData")
+integrated_A <- integrated_output
+edgelist_A <- integrated_A[["combined_edgelist"]]
+GFC_A <- integrated_A[["GFC_all_layers"]]
+cluster_calc_A <- integrated_A[["cluster_calc"]]
+
+layer_specific_outputs <- list(list(list(list()),list(list()), list(list(list()))), list(list(list()),list(list()), list(list(list()))))
+names(layer_specific_outputs) <- c("set1", "set2")
+
+names(layer_specific_outputs[["set1"]])<- c("edgelist", "cluster_calc", "part2")
+names(layer_specific_outputs[["set2"]])<- c("edgelist", "cluster_calc", "part2")
+
+layer_specific_outputs[["set1"]][["edgelist"]] <- edgelist_R
+layer_specific_outputs[["set2"]][["edgelist"]] <- edgelist_A
+
+layer_specific_outputs[["set1"]][["cluster_calc"]] <- cluster_calc_R
+layer_specific_outputs[["set2"]][["cluster_calc"]] <- cluster_calc_A
+
+layer_specific_outputs[["set1"]][["part2"]][[1]] <- GFC_R
+layer_specific_outputs[["set2"]][["part2"]][[1]] <- GFC_A
+
+names(layer_specific_outputs[["set1"]][["part2"]]) <- "GFC_all_genes"
+names(layer_specific_outputs[["set2"]][["part2"]]) <- "GFC_all_genes"
+
+layer_specific_outputs[["set1"]][["network"]] <- igraph::graph_from_data_frame(edgelist_R, directed=FALSE)
+layer_specific_outputs[["set2"]][["network"]] <- igraph::graph_from_data_frame(edgelist_A, directed=FALSE)
+```
+
+```{r create GFC data frames}
+source(paste0(working_directory,"scripts/", "cluster_calculation_MultiOmics.R"))
+source(paste0(working_directory,"scripts/", "vertical_Integration.R"))
+
+cluster_GFC_df_per_layer()
+```
+
+## Layer integration:
+
++ **cluster correlations**
+
+Between all pairs of clusters between all layers , the correlations of their mean GFCs are calculated to later on identify those with very similar expression patterns.
+
+```{r create pheno vecs}
+source(paste0(working_directory,"scripts/", "cluster_calculation_MultiOmics.R"))
+source(paste0(working_directory,"scripts/", "vertical_Integration.R"))
+integrated_output <-list()
+# create_pheno_vectors(GFC_boundary = "auto")
+integrated_output[["all_cluster_corrs"]] <- find_all_cluster_corrs()
+```
+
++ **find identicals**
+
+Here, those clusters inbetween layers that have highly similar expression patterns across conditions will be identified. To set the minimum similarity for two clusters to be considered identical, use the min_corr parameter. This should not bet set lower than 0.7. 
+
+```{r, warning=F}
+integrated_output[["identicals"]] <- ids(min_corr = .65)
+```
+
+```{r find zero sums}
+
+#integrated_output[["zero_sums"]] <- ops(min_corr = .65)
+
+```
+
++ **cross correlations**
+
+This step intends to find an adequate cutoff for cross layer correlations. To do this, choose a number of cut-offs to be tested (n), in the range of "threshold" and the highest cross correlation value found in the data. The function then goes on to propose a cutoff based on how well the resulting clusters in the integrated network are mixed with regard to entities from different layers, aiming to maximize that mixture. The statistics for the different cut-offs can be found at integrated_outputs$cross_corr_cutoff_stats, containing for each of the tested cutoffs the mixture score, the number of clusters in the resulting integrated network and the number of cross-layer edges.
+
+```{r cross correlations}
+# different cutoffs:
+
+#integrated_output[["cross_corr_cutoff_stats"]] <- find_cross_corr_cutoff(n = 50, threshold = 0.6)
+
+```
+
++ **choose the cross correlation cut-off**
+
+Set the minimum correlation using the threshold parameter.
+
+```{r}
+# set threshold to be the desired cutoff:
+
+integrated_output[["cross_correlations"]] <- cross_corrs(threshold = 0.69)
+
+# suggested for infomapR-infomapA: 0.909
+# suggested for walktrapR-infomapA: 0.69
+```
+
++ **integrate networks**
+
+```{r integrate networks}
+source(paste0(working_directory,"scripts/", "vertical_Integration.R"))
+integrated_output[["integrated_edgelist"]] <- create_integrated_edgelist(el = integrated_output$cross_correlations)
+integrated_output[["merged_net"]] <- igraph::graph_from_data_frame(integrated_output$integrated_edgelist, directed = F)%>%
+  igraph::simplify(., remove.multiple = TRUE, remove.loops = TRUE)
+```
+
++ **re-cluster the integrated network**:
+
+```{r re-cluster integrated network}
+source(paste0(working_directory,"scripts/", "vertical_Integration.R"))
+integrated_output[["cluster_calc"]] <- list()
+integrated_output$cluster_calc[["cluster_information"]] <- cluster_integrated_network(network = integrated_output$merged_net)
+```
+
++ **plot integrated network and module heatmap** (Fig. 6 supplement 2 E)
+
+The stacked barplot next to the module heatmap indicates the mixture of each module with regard to layers.
+
+```{r plot network}
+source(paste0(working_directory,"scripts/", "plot_network_hCoCena.R"))
+source(paste0(working_directory,"scripts/", "exp_script.R"))
+source(paste0(working_directory,"scripts/", "external_signature.R"))
+integrated_output[["layout"]] <- plot_integrated_network(network = integrated_output$merged_net, layout = NULL, 
+                                                         gene_labels = NULL, label_offset = 10)
+cluster_GFC_df_integrated()
+
+plot_cluster_heatmap(cluster_info = integrated_output$cluster_calc$cluster_information,
+                     GFCs = integrated_output$cluster_calc$GFC_per_cluster,
+                     cluster_columns = F,
+                     cluster_rows = T, 
+                     col_order = c("BxPC3_Ctrl_6h","BxPC3_Cispt_6h","Jurkat_Ctrl_6h","Jurkat_Cispt_6h"),
+                     return_HM = F, 
+                     user_enrichment_1 = entity_enrichment(cluster_info = integrated_output$cluster_calc$cluster_information)) 
+                     #user_enrichment_2 = enriched_per_cluster$cell_types_per_cluster)
+```
+
+### Get integrated GFCs table
+
+### Define GFC delta between cntrl and condition 
+
+```{r}
+#remove white clusters
+
+#change based on number of clusters included
+tmp <- integrated_output[["cluster_calc"]][["cluster_information"]][1:15,]
+conditions <- data.frame(strsplit(tmp$conditions, split = "#"))
+conditions <- conditions[,1]
+integrated_GFCs <- data.frame(strsplit(tmp$grp_means, split = ","))
+rownames(integrated_GFCs) <- conditions
+colnames(integrated_GFCs) <- tmp$color
+integrated_GFCs <- as.data.frame(sapply(integrated_GFCs, as.numeric))
+rownames(integrated_GFCs) <- conditions
+
+delta_GFCs <- as.data.frame(integrated_GFCs[1,] - integrated_GFCs[2,])
+rownames(delta_GFCs)[1] <- "TvsC_B"
+delta_GFCs <- rbind(delta_GFCs, (as.data.frame(integrated_GFCs[3,] - integrated_GFCs[4,])))
+rownames(delta_GFCs)[2] <- "TvsC_J"
+delta_GFCs <- rbind(delta_GFCs, (as.data.frame(abs(delta_GFCs[1,] - delta_GFCs[2,]))))
+rownames(delta_GFCs)[3] <- "CL_diff"
+```
+
+### Select interesting clusters for sensitivity prediction
+
+```{r, fig.height=10, fig.width=10}
+tmp2 <- as.data.frame(t(delta_GFCs))
+q <- quantile(tmp2$CL_diff)
+print(q)
+tmp2$Cluster <- rownames(tmp2)
+tmpM <- melt(tmp2)
+q50 <- 1.233 #change based on obtained q50
+Cluster_tokeep_50 <- subset(tmp2, tmp2$CL_diff > q50)
+clusters_tokeep_colors <- rownames(Cluster_tokeep_50)
+
+#boxplot
+
+ggplot(tmpM, aes(x = variable, y = value, color = Cluster, label = Cluster)) +
+  geom_boxplot(color = "black") +
+  geom_jitter() +
+  #geom_text_repel(color = "black") +
+  facet_wrap(~variable, scales = "free")
+```
+
+### Get sum of module genes to construct signature
+#### q50 modules
+
+```{r}
+cluster_info <- data.frame(integrated_output[["cluster_calc"]][["cluster_information"]])
+
+#indicate only clusters to keep
+
+q50clust_tokeep <- subset(cluster_info, cluster_info$color %in% clusters_tokeep_colors)
+q50genes_tokeep <- c()
+
+for (i in 1:nrow(q50clust_tokeep)){
+  
+  c <- q50clust_tokeep[i, ]
+  tmp <- data.frame(strsplit(c$gene_n, split = ","))
+  tmp <- pull(tmp)
+  tmp <- str_remove(tmp, " _A")
+  tmp <- unique(tmp)
+  q50genes_tokeep <- c(tmp, q50genes_tokeep)
+
+}
+
+q50genes_tokeep <- unique(q50genes_tokeep)
+
+#save(q50genes_tokeep, file="/home/caterina/data/vCoCena/objects/cocena_genelist_cispt.rda")
+```
+
+# Session info
+
+```{r}
+info <- sessionInfo()
+
+info
+```
+

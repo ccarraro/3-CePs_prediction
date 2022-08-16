@@ -1,0 +1,199 @@
+---
+title: "Prediction_cispt"
+author: "Caterina Carraro"
+date: "110822"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load environment
+
+```{r}
+load("/home/caterina/data/analysis/prediction/envs/110822_Prediction_cispt_GH.RData")
+```
+
+# Load packages
+
+```{r}
+library(dplyr)
+library(reshape2)
+library(ggplot2)
+library(GSVA)
+library(ggsci)
+library(metaMA)
+library(dplyr)
+library(glmnet)
+library(ROCR)
+library(Metrics)
+library(RColorBrewer)
+library(ggpubr)
+```
+
+# Upload HPA datasets and anno
+
+```{r}
+# load("/home/caterina/data/analysis/prediction/envs/220622_predstart.RData")
+```
+
+# Create list of HPA-annotated cell line IC50s
+
+```{r}
+# cell_line_HPA <- readRDS("/home/caterina/data/analysis/prediction/reference_files/cell_line_list.rds")
+# 
+# cispt_sensitivity_df <- read.csv("/home/caterina/data/analysis/prediction/reference_files/cisptIC50s.csv")
+# 
+# #subset for cell lines included in the HPA cell line atlas
+# cispt_sensitivity_df <- subset(cispt_sensitivity_df, cispt_sensitivity_df$Cell.line %in% cell_line_HPA)
+```
+
+# Generate signatures
+## Restrict the CvsC DEcall [(logFC>2.5; <-2.5), padj<0.01]
+
+```{r}
+# load("/home/caterina/data/analysis/prediction/objects/cispt_DEresults.RData")
+# DEresults_CvsC <-DEdf
+# 
+# #Restrict the CvsC DEcall [(logFC>2.5; <-2.5), padj<0.01]
+# 
+# restricted <- subset(DEresults_CvsC, DEresults_CvsC$regulation %in% c("up", "down"))
+# restricted <- subset(restricted, restricted$log2FoldChange>2.5 | restricted$log2FoldChange<(-2.5))
+# restricted <- subset(restricted, restricted$padj<0.01)
+# 
+# #Get the restricted coding DE up and down in Jurkat
+# 
+# Controls_resuDEG_BDOWN <- subset(restricted, restricted$regulation %in% c("down"))
+# Controls_resuDEG_BDOWN <- subset(Controls_resuDEG_BDOWN, GENETYPE=='protein_coding') 
+# Controls_resuDEG_BDOWN <- unique(Controls_resuDEG_BDOWN$SYMBOL)
+#  
+# Controls_resuDEG_BUP <- subset(restricted, restricted$regulation %in% c("up"))
+# Controls_resuDEG_BUP <- subset(Controls_resuDEG_BUP, GENETYPE=='protein_coding') 
+# Controls_resuDEG_BUP <- unique(Controls_resuDEG_BUP$SYMBOL)
+```
+
+## Prediction signature
+
+```{r}
+# #CoCena-based 
+# 
+# load("/home/caterina/data/analysis/prediction/objects/cocena_genelist_cispt.rda")
+# 
+# #Intersect CoCena with restricted CvsC DE
+# 
+# sign_restDE_CoCena_up50 <- intersect(Controls_resuDEG_BUP, q50genes_tokeep)
+# sign_restDE_CoCena_down50 <- intersect(Controls_resuDEG_BDOWN, q50genes_tokeep)
+# sign_restDE_CoCena_q50 <- list(sign_restDE_CoCena_up50, sign_restDE_CoCena_down50)
+# names(sign_restDE_CoCena_q50)[1] <- "up"
+# names(sign_restDE_CoCena_q50)[2] <- "down"
+```
+
+# Perform GSVA
+
+## Cell lines
+
+```{r}
+gsva_cell_line_q50 <- as.data.frame(t(gsva(expr = as.matrix(cell_line_NX), gset.idx.list = sign_restDE_CoCena_q50, method = "gsva")))
+
+gsva_cell_line_q50$fill <- ifelse(gsva_cell_line_q50$up > gsva_cell_line_q50$down, "sens", "not-sens")
+
+gsva_cell_line_q50$sub <- gsva_cell_line_q50$up - gsva_cell_line_q50$down
+```
+
+#### Visualize the GSVA
+
+```{r}
+labels <- subset(cispt_sensitivity_df, cispt_sensitivity_df$IC50 < 55)
+labels <- labels$Cell.line
+
+gsva_cell_line_q50$label <- ifelse(rownames(gsva_cell_line_q50) %in% labels, rownames(gsva_cell_line_q50), " ")
+gsva_cell_line_q50$circle <- ifelse(rownames(gsva_cell_line_q50) %in% labels, "yes", "no")
+
+ggplot(gsva_cell_line_q50, aes(x=up, y=down, fill = sub, label=label, color=circle)) +
+  geom_point(size = 3, shape=21) + theme_bw() + theme(aspect.ratio = 1) + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  scale_fill_viridis_c() + ggtitle("GSVA analysis on cell lines") +       geom_text() + scale_color_manual(values = c("black", "red"))
+```
+### Evaluate prediction
+
+```{r}
+corr_table <- gsva_cell_line_q50[,3:4]
+corr_table$Cell.line <- rownames(corr_table)
+corr_table$fill <- NULL
+corr_table <- merge(corr_table, cispt_sensitivity_df, by = "Cell.line")
+corr_table <- corr_table[, c(1,2,6)]
+corr_table <- subset(corr_table, corr_table$IC50 < 55)
+
+rownames(corr_table) <- corr_table$Cell.line
+corr_table$Cell.line <- NULL
+
+ggscatter(corr_table, x = "sub", y = "IC50",
+   color = "black", shape = 21, size = 3, 
+   add = "reg.line", label = rownames(corr_table),
+   add.params = list(color = "blue", fill = "#999999"), 
+   conf.int = TRUE, 
+   cor.coef = TRUE,
+   cor.coeff.args = list(method = "pearson", label.x = 0.15, label.sep = "\n"), xlim = c(-0.6, 1.3), ylim = c(-20, 50))
+```
+
+## Tumors
+
+```{r}
+# gsva_tumors_q50 <- as.data.frame(t(gsva(expr = as.matrix(tumors), gset.idx.list = sign_restDE_CoCena_q50, method = "gsva")))
+
+gsva_tumors_q50$fill <- ifelse(gsva_tumors_q50$up > gsva_tumors_q50$down, "sens", "not-sens")
+
+gsva_tumors_q50$sub <- gsva_tumors_q50$up - gsva_tumors_q50$down
+```
+
+### Visualize the GSVA
+
+```{r}
+ggplot(gsva_tumors_q50, aes(x=up, y=down, color = sub)) +
+geom_point(size = 0.5) + 
+theme_bw() + theme(aspect.ratio = 1) + 
+geom_abline(slope = 1, intercept = -0.4, linetype = "dashed") +
+scale_color_viridis_c() + ggtitle("GSVA analysis on tumors")
+```
+
+#### Inspect sensitivity in tumor types
+
+```{r}
+#Annotate the gsva_tumor_q50
+ 
+anno_gsva_tumors_q50 <- gsva_tumors_q50
+anno_gsva_tumors_q50$Sample <- rownames(anno_gsva_tumors_q50)
+anno_gsva_tumors_q50 <- merge(anno_gsva_tumors_q50, anno_tumors, by = "Sample")
+
+median(anno_gsva_tumors_q50$sub)
+ 
+plot_order_violin <- anno_gsva_tumors_q50%>%group_by(Cancer)%>%summarise_each(funs(median), sub)
+plot_order_violin <- arrange(plot_order_violin, sub)
+plot_order_violin_vect <- as.vector(plot_order_violin$Cancer)
+anno_gsva_tumors_q50$Cancer <- factor(anno_gsva_tumors_q50$Cancer, levels = plot_order_violin_vect)
+
+ggplot(anno_gsva_tumors_q50, aes(x=Cancer, y=sub, fill=Cancer)) + 
+geom_violin() +
+stat_summary(fun.y=median, geom="point", size=2, color="red") +
+geom_abline(slope = 0, intercept = -0.017, linetype = "dashed") +
+scale_fill_viridis_d()
+```
+
+# Session Info
+
+```{r}
+info <- sessionInfo()
+
+info
+```
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,3412 @@
+---
+title: "ATAC_3-CePs"
+author: "Caterina Carraro"
+date: "050822"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Load environment
+
+```{r}
+load("./080822_ATACseq_3-CePs_GH.RData")
+```
+
+# Install packages
+
+```{r}
+list.of.bioc.packages<- c("Rsamtools",
+                          "GenomicAlignments",
+                          "rtracklayer",
+                          "ChIPseeker",
+                          "DBI",
+                          "TxDb.Hsapiens.UCSC.hg38.knownGene",
+                          "org.Mm.eg.db",
+                          "DESeq2",
+                          "org.Hs.eg.db",
+                          "vsn",
+                          "tximport",
+                          "rhdf5",
+                          "clusterProfiler",
+                          "DOSE",
+                          "GSEABase",
+                          "RColorBrewer",
+                          "ComplexHeatmap",
+                          "pheatmap",
+                          "genefilter",
+                          "biomaRt",
+                          "limma",
+                          "sva",
+                          "IHW",
+                          "Gviz",
+                          "tidyverse",
+                          "useful",
+                          "gplots",
+                          "Matrix",
+                          "SummarizedExperiment",
+                          "BiocParallel",
+                          "ggrepel",
+                          "ggbeeswarm",
+                          "grid",
+                          "gridextra",
+                          "reshape2",
+                          "factoextra",
+                          "Hmisc",
+                          "GenomicRanges",
+                          "cowplot")
+new.packages.bioc <- list.of.bioc.packages[!(list.of.bioc.packages %in% installed.packages()[,"Package"])]
+ 
+if(length(new.packages.bioc)>0)if (!requireNamespace("BiocManager")) install.packages("BiocManager")
+BiocManager::install(new.packages.bioc, update = FALSE)
+```
+
+### Load packages
+
+```{r, message=FALSE}
+library(tidyverse)
+library(useful)
+library(gplots)
+library(Matrix)
+library(SummarizedExperiment)
+library(BiocParallel)
+library(ggrepel)
+library(ggbeeswarm)
+library(grid)
+library(gridExtra)
+library(reshape2)
+library(factoextra)
+library(Hmisc)
+library(GenomicRanges)
+library(GenomicAlignments)
+library(rtracklayer)
+library(Rsamtools)
+library(ChIPseeker)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(biomaRt)
+library(org.Mm.eg.db) 
+library(org.Hs.eg.db) 
+library(DESeq2)
+library(tximport)
+library(vsn)
+library(IHW)
+library(rhdf5)
+library(genefilter)
+library(fdrtool)
+library(RColorBrewer)
+library(pheatmap)
+library(cowplot) 
+library(Gviz)
+library(GSEABase)
+library(clusterProfiler)
+library(DOSE)
+library(openxlsx)
+library(sva)
+library(limma)
+library(ggplot2)
+library(ComplexHeatmap)
+library(circlize)
+library(viridis)
+```
+
+# ATAC-seq analysis
+
+## Define analysis functions
+
+### Peak import
+
+```{r}
+# # Importing of BED files and production of GRanges object of all peaks
+# importBEDpeaks <- function(pattern = NULL, 
+#                            path = NULL,
+#                            exclude = NULL){
+#   fileNames <- dir(path, pattern = pattern)
+#   if(!is.null(exclude)){
+#    fileNames <- fileNames[!grepl(exclude, fileNames)] 
+#   }
+#   bedPeaks <- GRangesList()
+#   for (i in fileNames) {
+#     tmp <- read.table(paste(path,i,sep="/"))
+#     bedPeaks[[i]] <- GRanges(seqnames = Rle(tmp$V1), ranges = IRanges(start = tmp$V2, end = tmp$V3), strand = Rle("*"))
+#     bedPeaks[[i]] <- bedPeaks[[i]][grepl("chr",bedPeaks[[i]]@seqnames),]
+#   }
+#   if (!is.null(pattern)) names(bedPeaks) <- sub(pattern, "", names(bedPeaks), fixed = TRUE)
+#   return(bedPeaks)
+# }
+```
+
+### Peak unification
+
+```{r}
+# # Produce union of all peaks for counting of the reads
+# unionPeaks <- function(peaks) {
+#   upks <- GenomicRanges::reduce(unlist(peaks))
+#   for (i in names(peaks)) {
+#     mcols(upks)[, i] <- countOverlaps(subject = peaks[[i]],
+#                                       query = upks) != 0
+#   }
+#   names(upks) <- paste(seqnames(upks), start(upks), end(upks), sep="_")
+#   return(upks)
+# }
+```
+
+### Count table
+
+```{r}
+# # Prepare count table for all peaks
+# peakCountTable <- function(peaks, path = NULL, pattern = NULL,
+#                            exclude = NULL) {
+#   fileNames <- dir(path, pattern = pattern)
+#   if(!is.null(exclude)){
+#    fileNames <- fileNames[!grepl(exclude, fileNames)] 
+#   }
+#   bamFiles <- BamFileList(paste(path,fileNames,sep="/"), asMates = TRUE)
+#   countTable <- summarizeOverlaps(features = peaks,
+#                                   reads = bamFiles,
+#                                   mode = "Union",
+#                                   singleEnd = FALSE,
+#                                   fragments =FALSE,
+#                                   ignore.strand = TRUE)
+#   if (!is.null(pattern)) colnames(countTable) <- sub(pattern, "", colnames(countTable))
+#   return(countTable)
+# }
+```
+
+### Heatmap color scaling
+
+```{r}
+scaleColors <- function(data = input_scale, # data to use
+                        maxvalue = NULL # value at which the color is fully red / blue
+){
+  if(is.null(maxvalue)){
+    maxvalue <- floor(min(abs(min(data)), max(data)))
+  }
+  if(max(data) > abs(min(data))){
+    if(ceiling(max(data)) == maxvalue){
+      myBreaks <- c(floor(-max(data)), seq(-maxvalue+0.2, maxvalue-0.2, 0.2),  ceiling(max(data)))
+    } else{
+      myBreaks <- c(floor(-max(data)), seq(-maxvalue, maxvalue, 0.2),  ceiling(max(data)))
+    }
+    paletteLength <- length(myBreaks)
+    myColor <- colorRampPalette(c("blue", "white", "red"))(paletteLength)
+  } else {
+    if(-floor(min(data)) == maxvalue){
+      myBreaks <- c(floor(min(data)), seq(-maxvalue+0.2, maxvalue-0.2, 0.2),  ceiling(min(data)))
+    } else{
+      myBreaks <- c(floor(min(data)), seq(-maxvalue, maxvalue, 0.2),  ceiling(abs(min(data))))
+    }
+    paletteLength <- length(myBreaks)
+    myColor <- colorRampPalette(c("blue", "white", "red"))(paletteLength)
+  }
+  return(list(breaks = myBreaks, color = myColor))
+}
+```
+
+### ATAC Heatmap
+
+```{r}
+# ATACHeatmap <- function(set,
+#                         feature,
+#                         title="",
+#                         show_rownames = FALSE,
+#                         cluster_cols = FALSE,
+#                         font.size=7,
+#                         DAR=FALSE,
+#                         max.value=2){
+# 
+#   if(set=="all"){
+#     input <- norm
+#   }else if(feature=="genes"){
+#     peakset <- rownames(peakAnnotation.filt.df[peakAnnotation.filt.df$symbol %in% set,])
+#     input <- norm[rownames(norm) %in% peakset,]
+#   }else if(feature=="peaks"){
+#     input <- norm[rownames(norm) %in% set,]
+#   }
+# 
+#   if(!DAR==FALSE){
+#     input <- input[rownames(input) %in% rownames(DAR),]
+#   }
+# 
+#   idx <- match(rownames(input),rownames(peakAnnotation.filt.df))
+#   rownames(input) <- paste(rownames(input),peakAnnotation.filt.df$symbol[idx], sep="_")
+# 
+#   input_scale <- t(scale(t(input)))
+# 
+#   input_scale <- input_scale[,sample_table[order(sample_table$order,decreasing = FALSE),]$sample]
+# 
+#   pheatmap(input_scale,
+#          main=title,
+#          show_rownames=show_rownames,
+#          show_colnames=TRUE,
+#          cluster_cols = cluster_cols,
+#          fontsize = font.size,
+#          annotation_col = sample_table[,c("Group","Celltype","Time","Compound")],
+#          breaks = scaleColors(data = input_scale, maxvalue = max.value)[["breaks"]],
+#          color = scaleColors(data = input_scale, maxvalue = max.value)[["color"]])
+# }
+```
+
+### PCA
+
+```{r}
+plotPCA <- function(pca_input = dds_vst,
+                    ntop="all",
+                    xPC=1,
+                    yPC=2,
+                    point_size=3,
+                    title="",
+                    color,
+                    #shape,
+                    anno_color="NULL"){
+
+  vst_matrix <- as.matrix(assay(pca_input))
+
+  if(ntop=="all"){
+    pca <- prcomp(t(vst_matrix))
+  }else{
+    # select the ntop genes by variance
+    select <- order(rowVars(vst_matrix), decreasing=TRUE)[c(1:ntop)]
+    pca <- prcomp(t(vst_matrix[select,]))
+  }
+
+  #calculate explained variance per PC
+  explVar <- pca$sdev^2/sum(pca$sdev^2)
+  # transform variance to percent
+  percentVar <- round(100 * explVar[c(xPC,yPC)], digits=1)
+
+  # Define data for plotting
+  pcaData <- data.frame(xPC=pca$x[,xPC],
+                        yPC=pca$x[,yPC],
+                        color = sample_table[[color]],
+                        #shape = sample_table[[shape]],
+                        name= as.character(sample_table$sample),
+                        stringsAsFactors = F)
+
+  #plot PCA
+  pca_plot <- ggplot(pcaData, aes(x = xPC, y = yPC, fill=color)) +
+    geom_point(size =point_size, shape=21, color="black") + theme_bw()+
+      xlab(paste0("PC ",xPC, ": ", percentVar[1], "% variance")) +
+    ylab(paste0("PC ",yPC,": ", percentVar[2], "% variance"))
+
+  if(anno_color[1] == "NULL"){
+    pca_plot <- pca_plot + scale_color_discrete(name=color)
+  }else{
+    pca_plot <- pca_plot + scale_fill_manual(values=anno_color)
+  }
+
+  #pca_plot <- pca_plot +
+    #geom_text_repel(aes(label = name), colour = "black")+
+    #xlab(paste0("PC ",xPC, ": ", percentVar[1], "% variance")) +
+    #ylab(paste0("PC ",yPC,": ", percentVar[2], "% variance")) +
+    #coord_fixed()+
+    #theme_classic()+
+    #theme(aspect.ratio = 1)+
+    #ggtitle(title)
+
+  pca_plot
+}
+```
+
+### PCA from dataframe function
+
+```{r}
+# plotPCADF <- function(pca_input = dds_vst,
+#                      ntop=500, 
+#                      xPC=1, 
+#                      yPC=2,
+#                      color,
+#                      anno_colour="NULL",
+#                      shape="NULL",
+#                      point_size=3,
+#                      title="PCA", 
+#                     label = NULL, 
+#                     label_subset = NULL){
+#   
+#   if(!is.data.frame(pca_input)){
+#   vst_matrix <-as.matrix(assay(pca_input))
+#   }else{
+#    vst_matrix <- pca_input
+#   }
+#   
+#   if(ntop=="all"){
+#     pca <- prcomp(t(vst_matrix)) 
+#   }else{
+#     # select the ntop genes by variance
+#     select <- order(rowVars(vst_matrix), decreasing=TRUE)[c(1:ntop)]
+#     pca <- prcomp(t(vst_matrix[select,]))
+#   }
+#   
+#   #calculate explained variance per PC
+#   explVar <- pca$sdev^2/sum(pca$sdev^2)
+#   # transform variance to percent
+#   percentVar <- round(100 * explVar[c(xPC,yPC)], digits=1)
+# 
+#   # Define data for plotting  
+#   pcaData <- data.frame(xPC=pca$x[,xPC], 
+#                         yPC=pca$x[,yPC], 
+#                         color = sample_table[[color]],
+#                         name= as.character(sample_table$ID),
+#                         stringsAsFactors = F)
+#   
+#   #plot PCA
+#   if(is.factor(pcaData$color) || is.character(pcaData$color)|| is.integer(pcaData$color)){
+#     if(shape == "NULL"){
+#         pca_plot <- ggplot(pcaData, aes(x = xPC, y = yPC, colour=color)) +
+#                           geom_point(size =point_size)
+#       }else{
+#         pcaData$shape = sample_table[[shape]]
+#         pca_plot <- ggplot(pcaData, aes(x = xPC, y = yPC, colour=color, shape=shape)) +
+#                           geom_point(size =point_size) +
+#                           scale_shape_discrete(name=shape)
+#       }
+#     
+#     if(anno_colour[1] == "NULL"){
+#         pca_plot <- pca_plot + scale_color_discrete(name=color)
+#     }else{
+#         pca_plot <- pca_plot + scale_color_manual(values=anno_colour, name=color)
+#     }
+#     
+#   }else if(is.numeric(pcaData$color)){
+#       if(shape == "NULL"){
+#         pca_plot <- ggplot(pcaData, aes(x = xPC, y = yPC, colour=color)) +
+#           geom_point(size =point_size) +
+#           scale_color_gradientn(colours = bluered(100),name=color)
+#       }else{
+#         pcaData$shape = sample_table[[shape]]
+#         pca_plot <- ggplot(pcaData, aes(x = xPC, y = yPC, colour=color, shape=shape)) +
+#           geom_point(size =point_size) +
+#           scale_color_gradientn(colours = bluered(100),name=color)+
+#           scale_shape_discrete(name=shape)
+#       }
+#   }
+# 
+# # adds a label to the plot. To label only specific points, put them in the arument label_subset
+#   if (!is.null(label) == TRUE){
+#     pcaData$label <- sample_table[[label]]
+#     if(!is.null(label_subset) == TRUE){
+#     pcaData_labeled <- pcaData[pcaData$label %in% label_subset,]
+#     } else {
+#       pcaData_labeled <- pcaData
+#     }
+#       pca_plot <- pca_plot + 
+#       geom_text_repel(data = pcaData_labeled, aes(label = label), nudge_x = 2, nudge_y = 2, colour = "black") 
+#   }
+#   
+#     pca_plot <- pca_plot+
+#     xlab(paste0("PC ",xPC, ": ", percentVar[1], "% variance")) +
+#     ylab(paste0("PC ",yPC,": ", percentVar[2], "% variance")) +
+#     coord_fixed()+
+#     theme_classic()+        
+#     theme(aspect.ratio = 1)+
+#     ggtitle(title)
+#   
+#   pca_plot
+# }
+```
+
+### DESeq2 output
+
+```{r}
+# # Specify structure of DESeq2_analysis_object
+# setClass(Class = "DESeq2_analysis_object",
+#          slots = c(results="data.frame", DE_genes="list", Number_DE_genes="list"))
+# 
+# 
+# # Wrapper Function to perform DESeq2 differential testing
+# DEAnalysis <- function(condition,
+#                        alpha = 0.05, 
+#                        lfcThreshold = 0,
+#                        sigFC = 2, 
+#                        multiple_testing = "IHW",
+#                        independentFiltering="TRUE",
+#                        shrinkage = TRUE,
+#                        shrinkType = "normal"){
+#   # create results_list  
+#   results_list <- list()
+#   # print parameters
+#   results_list$parameters <-list(multiple_testing = multiple_testing,
+#                                  p_value_threshold = alpha,
+#                                  log2_FC_threshold = lfcThreshold,
+#                                  shrinkage = shrinkage,
+#                                  shrinkage_type = shrinkType)
+#   # Run results() function on comparisons defined in comparison table
+#   for (i in 1:nrow(comparison_table)){
+#     # create DE_object
+#     DE_object <- new(Class = "DESeq2_analysis_object")
+#     # IHW
+#     if (multiple_testing=="IHW") {
+#       res_deseq_lfc <- results(dds,
+#                                contrast = c(condition,
+#                                             paste(comparison_table$comparison[i]),
+#                                             paste(comparison_table$control[i])),
+#                                lfcThreshold = lfcThreshold,
+#                                alpha = alpha,
+#                                filterFun = ihw,
+#                                altHypothesis = "greaterAbs")
+#       # Independent Filtering
+#     }else {
+#       res_deseq_lfc <- results(dds,
+#                                contrast = c(condition,
+#                                             paste(comparison_table$comparison[i]),
+#                                             paste(comparison_table$control[i])),
+#                                lfcThreshold = lfcThreshold,
+#                                alpha = alpha,
+#                                independentFiltering = independentFiltering,
+#                                altHypothesis = "greaterAbs",
+#                                pAdjustMethod= multiple_testing)
+#     }
+#     if(shrinkage == TRUE){
+#       res_deseq_lfc <- lfcShrink(dds, 
+#                                  contrast = c(condition,
+#                                               paste(comparison_table$comparison[i]),
+#                                               paste(comparison_table$control[i])),
+#                                  res=res_deseq_lfc,
+#                                  type = shrinkType)
+#     }
+#     res_deseq_lfc <- as.data.frame(res_deseq_lfc)
+#     # indicate significant DE genes  
+#     res_deseq_lfc$regulation <- ifelse(!is.na(res_deseq_lfc$padj)&
+#                                          res_deseq_lfc$padj <= alpha&
+#                                          res_deseq_lfc$log2FoldChange > log(sigFC,2),
+#                                        "up",
+#                                        ifelse(!is.na(res_deseq_lfc$padj)&
+#                                                 res_deseq_lfc$padj <= alpha&
+#                                                 res_deseq_lfc$log2FoldChange < -log(sigFC,2),
+#                                               "down",
+#                                               "n.s."))
+#     # add gene annotation to results table
+#     res_deseq_lfc$peakid <- row.names(res_deseq_lfc) # ensembl-IDs as row names
+#     res_deseq_lfc <- merge(res_deseq_lfc, 
+#                            norm_anno[,c("peakid", 
+#                                         "symbol", 
+#                                         "type",
+#                                         "description",
+#                                         "geneChr",
+#                                         "geneStart",
+#                                         "geneEnd",
+#                                         "geneLength",
+#                                         "geneStrand",
+#                                         "geneId",
+#                                         "distanceToTSS",
+#                                         "start",
+#                                         "end",
+#                                         "annotation")], 
+#                            by = "peakid") 
+#     row.names(res_deseq_lfc) <- res_deseq_lfc$peakid
+#     res_deseq_lfc$comparison<-paste(comparison_table$comparison[i]," vs ",comparison_table$control[i],
+#                                     sep="")
+#     # re-order results table
+#     if (multiple_testing=="IHW") {
+#       res_deseq_lfc<-res_deseq_lfc[,c("peakid", 
+#                                         "symbol",
+#                                       "geneId",
+#                                         "type",
+#                                         "description",
+#                                         "geneChr",
+#                                      "comparison",
+#                                      "regulation",
+#                                      "baseMean",
+#                                      "log2FoldChange",
+#                                      "lfcSE",
+#                                      "stat",
+#                                      "pvalue",
+#                                      "padj",
+#                                      "weight",
+#                                      "annotation")]
+#     }else{
+#       res_deseq_lfc<-res_deseq_lfc[,c("peakid", 
+#                                         "symbol",
+#                                       "geneId",
+#                                         "type",
+#                                         "description",
+#                                         "geneChr",
+#                                       "comparison",
+#                                       "regulation",
+#                                       "baseMean",
+#                                       "log2FoldChange",
+#                                       "lfcSE",
+#                                       "stat",
+#                                       "pvalue",
+#                                       "padj",
+#                                       "annotation")]
+#     }
+#     # print result table
+#     DE_object@results <- res_deseq_lfc
+#     # print DE genes in seperate tables
+#     DE_object@DE_genes <- list(up_regulated_Genes = res_deseq_lfc[res_deseq_lfc$regulation =="up",],
+#                                down_regulated_Genes= res_deseq_lfc[res_deseq_lfc$regulation =="down",])
+#     # print the numbers of DE genes
+#     DE_object@Number_DE_genes <- list(up_regulated_Genes = nrow(DE_object@DE_genes$up_regulated_Genes),
+#                                       down_regulated_Genes= nrow(DE_object@DE_genes$down_regulated_Genes))
+#     # write DE_object into results_list
+#     results_list[[paste(comparison_table$comparison[i], "vs", comparison_table$control[i], sep="_")]] <- DE_object
+#   }
+#   return(results_list)
+# }
+```
+
+### Remove potential batch effects using the removeBatchEffect function from limma
+
+```{r}
+# limmaBatchEffectRemoval <- function(input=dds_vst,
+#                                        batchfactor, # name of batch effect column in sample_table
+#                                        batchfactor_2=NULL,
+#                                        modelfactor){ # name of model effect column in sample_table
+#   
+#   # rlog-transformed input
+#   x <- as.matrix(assay(input)) 
+#   
+#   # design matrix
+#   model <- model.matrix(~sample_table[,c(modelfactor)])
+#   
+#   # run batch remocal function
+#   if(is.numeric(sample_table[,colnames(sample_table) == batchfactor[1]])==T){
+#     as.data.frame(removeBatchEffect(x,
+#                                     covariates = sample_table[,colnames(sample_table) %in% batchfactor],
+#                                     design = model))
+#     }else{
+#       if(is.null(batchfactor_2)){
+#         as.data.frame(removeBatchEffect(x=x,
+#                                         batch = sample_table[,colnames(sample_table) == batchfactor],
+#                                         design = model))
+#       }else{
+#         as.data.frame(removeBatchEffect(x=x,
+#                                         batch = sample_table[,colnames(sample_table) == batchfactor],
+#                                         batch2 = sample_table[,colnames(sample_table) == batchfactor_2],
+#                                         design = model))
+#       }
+#     }
+# }
+```
+
+### Heatmap and GO enrichment analysis of PCA loadings
+
+```{r}
+# plotLoadings_ATAC <- function(input=dds_vst,
+#                          PC="PC1", 
+#                          ntop="all",
+#                          GSEA_pcutoff=0.3,
+#                          GSEA_qcutoff=0.3,
+#                          font.size=10,
+#                          cluster_rows=FALSE,
+#                          cluster_cols=FALSE){
+#   if(ntop=="all"){
+#     pca <- prcomp(t(assay(input))) 
+#   }else{
+#     select <- order(rowVars(assay(input)), decreasing=TRUE)[c(1:ntop)]
+#     pca <- prcomp(t(assay(input)[select,]))
+#   }
+#   
+#   Loadings <- pca$rotation[,PC]
+#   Loadings <- Loadings[order(Loadings, decreasing = T)]
+#   Loadings <- names(Loadings[c(1:25,(length(Loadings)-24):length(Loadings))])
+#   
+#   heatmap <- norm[rownames(norm) %in% Loadings,]
+#   idx <- match(rownames(heatmap),rownames(peakAnnotation.df))
+#   rownames(heatmap) <- paste(rownames(heatmap),": ",peakAnnotation.df$symbol[idx],sep="")
+#   heatmap <- heatmap[,colnames(heatmap) %in% sample_table$sample]
+#   heatmap_scale <- as.matrix(t(scale(t(heatmap))))
+#   
+#   heatmap_scale <- heatmap_scale[,sample_table[order(sample_table$order,decreasing = FALSE),]$sample]
+#   
+#   # Heatmap
+#   p1 <- pheatmap(heatmap_scale,
+#                  main=paste("top 25 ",PC, " loadings in both directions",sep=""),
+#                  show_rownames=TRUE,
+#                  show_colnames = TRUE,
+#                  cluster_rows = cluster_rows,
+#                  cluster_cols = cluster_cols,
+#                  annotation_col = sample_table[,c("Group","Time","Compound","Celltype"),drop=FALSE],
+#                  breaks = scaleColors(data = heatmap_scale, maxvalue = 2)[["breaks"]], 
+#                  color = scaleColors(data = heatmap_scale, maxvalue = 2)[["color"]],
+#                  fontsize=font.size,
+#                  silent = TRUE)
+#   p1 <- ggpubr::as_ggplot(p1$gtable)
+#   
+#   #GOEA
+#   up <- pca$rotation[,PC]
+#   up <- names(up[order(up, decreasing = T)])[1:200]
+#   up_genes <- peakAnnotation.df[up,]$geneId
+#   
+#   GOup <- as.data.frame(enrichGO(gene = up_genes,
+#                                  universe = peakAnnotation.filt.df$geneId,
+#                                  OrgDb = org.Hs.eg.db,
+#                                  ont = "BP",
+#                                  pAdjustMethod = "bonferroni",
+#                                  pvalueCutoff  = GSEA_pcutoff,
+#                                  qvalueCutoff  = GSEA_qcutoff,
+#                                  readable      = T))
+#   
+#   if(nrow(GOup)<1){
+#     p2 <- paste("No enriched GO terms for genes annotated to \n top 200 peaks high on ",PC," (bonferroni corrected p < ",GSEA_qcutoff,")",sep="")
+#     p2 <- ggpubr::as_ggplot(textGrob(p2))
+#   }else{
+#     GOup <- GOup[order(GOup$Count,decreasing=FALSE),]
+#     GOup$Description <- ifelse(nchar(GOup$Description)>50,
+#                                paste(substr(GOup$Description, 1, 50),"[...]",sep=""),
+#                                GOup$Description)
+#     GOup$Description <- factor(GOup$Description, levels = unique(GOup$Description))
+#     GOup$GeneRatio <- factor(GOup$GeneRatio, levels = unique(GOup$GeneRatio))
+#     
+#     if(nrow(GOup)>10){
+#       GOup <- GOup[1:10,] 
+#     }
+#     
+#     p2 <- ggplot(GOup, aes(x = GeneRatio, y = Description, color = p.adjust)) +
+#       geom_point(aes(size = Count)) +
+#       scale_colour_gradientn(colours=c('red', 
+#                                        'orange', 
+#                                        'darkblue',
+#                                        'darkblue'),
+#                              limits=c(0,1),
+#                              values   = c(0,0.05,0.2,0.5,1),
+#                              breaks   = c(0.05,0.2,1),
+#                              labels = format(c(0.05,0.2,1))) +
+#       ylab(NULL) +
+#       ggtitle(paste("Enriched GO terms for genes annotated to \n top 200 peaks high on ",PC," (bonferroni corrected p < ",GSEA_qcutoff,")",sep=""))+
+#       theme_bw() +
+#       theme(text = element_text(size=font.size),
+#             plot.title = element_text(size=font.size),
+#             axis.text.x = element_text(size=font.size,angle = 90),
+#             axis.text.y = element_text(size=font.size))
+#   }
+#   
+#   down <- pca$rotation[,PC]
+#   down <- names(down[order(down, decreasing = F)])[1:200]
+#   down_genes <- peakAnnotation.df[down,]$geneId
+#   
+#   GOdown <- as.data.frame(enrichGO(gene = down_genes,
+#                                    universe = peakAnnotation.filt.df$geneId,
+#                                    OrgDb = org.Hs.eg.db,
+#                                    ont = "BP",
+#                                    pAdjustMethod = "bonferroni",
+#                                    pvalueCutoff  = GSEA_pcutoff,
+#                                    qvalueCutoff  = GSEA_qcutoff,
+#                                    readable      = T))
+#   if(nrow(GOdown)<1){
+#     p3 <- paste("No enriched GO terms for genes annotated to \n top 200 peaks low on ",PC," (bonferroni corrected p < ",GSEA_qcutoff,")",sep="")
+#     p3 <- ggpubr::as_ggplot(textGrob(p3))
+#   }else{
+#     GOdown <- GOdown[order(GOdown$Count,decreasing=FALSE),]
+#     GOdown$Description <- ifelse(nchar(GOdown$Description)>50,
+#                                  paste(substr(GOdown$Description, 1, 50),"[...]",sep=""),
+#                                  GOdown$Description)
+#     GOdown$Description <- factor(GOdown$Description, levels = unique(GOdown$Description))
+#     GOdown$GeneRatio <- factor(GOdown$GeneRatio, levels = unique(GOdown$GeneRatio))
+#     if(nrow(GOdown)>10){
+#       GOdown <- GOdown[1:10,] 
+#     }
+#     
+#     p3 <- ggplot(GOdown, aes(x = GeneRatio, y = Description, color = p.adjust)) +
+#       geom_point(aes(size = Count)) +
+#       scale_colour_gradientn(colours=c('red', 
+#                                        'orange', 
+#                                        'darkblue',
+#                                        'darkblue'),
+#                              limits=c(0,1),
+#                              values   = c(0,0.05,0.2,0.5,1),
+#                              breaks   = c(0.05,0.2,1),
+#                              labels = format(c(0.05,0.2,1))) +
+#       ylab(NULL) +
+#       ggtitle(paste("Enriched GO terms for genes annotated to \n top 200 peaks low on ",PC," (bonferroni corrected p < ",GSEA_qcutoff,")",sep=""))+
+#       theme_bw() +
+#       theme(text = element_text(size=font.size),
+#             plot.title = element_text(size=font.size),
+#             axis.text.x = element_text(size=font.size,angle = 90),
+#             axis.text.y = element_text(size=font.size)) 
+#   }
+#   right_col <- plot_grid(p2, p3, align = 'v', ncol=1)
+#   return(plot_grid(p1, right_col, ncol = 2, rel_widths = c(1.5, 1)))
+# }
+```
+
+### DARs (differentially accessible regions) heatmap
+
+```{r}
+# DARheatmap <- function(results,
+#                        data,
+#                        DAR_sig="padj",
+#                        DAR_p="0.1",
+#                        DAR_FC=1.5,
+#                        annotation,
+#                        show_rownames=FALSE,
+#                        cluster_rows=FALSE,
+#                        cluster_cols=FALSE){
+#   if(DAR_sig=="pvalue"){
+#     DAR <- rownames(results[results$pvalue < DAR_p & 
+#                               abs(results$log2FoldChange)>log(DAR_FC,2),])
+#   }else if(DAR_sig=="padj"){
+#     DAR <- rownames(results[results$padj < DAR_p & 
+#                               abs(results$log2FoldChange)>log(DAR_FC,2),])
+#     }else{
+#     print("Choose either 'pvalue' or 'padj' for DAR_sig")
+#   }
+#   
+#   DARcounts <- data[rownames(data) %in% DAR,]
+#   idx <- match(rownames(DARcounts), rownames(peakAnnotation.df))
+#   rownames(DARcounts) <- paste(rownames(DARcounts), peakAnnotation.df$symbol[idx], sep=": ")
+#   DAR_scaled <- t(scale(t(DARcounts), scale=TRUE, center = TRUE))
+#   DAR_scaled <- DAR_scaled[,sample_table[order(sample_table$order,decreasing = FALSE),]$sample]
+#   
+#   p1 <- pheatmap(DAR_scaled,
+#                  main="Hierarchical Clustering of differential accessible regions",
+#                  show_rownames=show_rownames,
+#                  show_colnames=TRUE,
+#                  cluster_cols = cluster_cols,
+#                  fontsize = 7, 
+#                  annotation_col = sample_table[,c("Group","Celltype","Time","Compound"),drop=FALSE],
+#                  breaks = scaleColors(data = DAR_scaled, maxvalue = 2)[["breaks"]], 
+#                  color = scaleColors(data = DAR_scaled, maxvalue = 2)[["color"]],
+#                  silent = TRUE)
+#   
+#   p1 <- ggpubr::as_ggplot(p1$gtable)
+#   
+#   return(p1)
+# }
+```
+
+### Union of DE genes (coding in promoter regions)
+
+```{r}
+uDEG <- function(comparisons){
+  uDEGs <- NULL
+  tmp <- DEresults[names(DEresults) %in% comparisons]
+  for(i in 1:length(comparisons)){
+    DEGs <- as.data.frame(tmp[[i]]@results[tmp[[i]]@results$regulation %in% c("up","down"),])
+    DEGs <- subset(DEGs, type=='protein_coding')
+    DEGs <- subset(DEGs, DEGs$annotation %in% c("Promoter (<=1kb)", "Promoter (1-2kb)", "Promoter (2-3kb)"))
+    uDEGs <- unique(c(uDEGs, DEGs$symbol))
+  }
+  uDEGs
+}
+```
+
+### Union of DARs (coding in promoter regions)
+
+```{r}
+uDAR <- function(comparisons){
+  uDARs <- NULL
+  tmp <- DEresults[names(DEresults) %in% comparisons]
+  for(i in 1:length(comparisons)){
+    DARs <- as.data.frame(tmp[[i]]@results[tmp[[i]]@results$regulation %in% c("up","down"),])
+    DARs <- subset(DARs, type=='protein_coding')
+    DARs <- subset(DARs, DARs$annotation %in% c("Promoter (<=1kb)", "Promoter (1-2kb)", "Promoter (2-3kb)"))
+    uDARs <- unique(c(uDARs, DARs$peakid))
+  }
+  uDARs
+}
+```
+
+### Union of DAR
+
+```{r}
+uDARall <- function(comparisons){
+  uDARs <- NULL
+  tmp <- DEresults[names(DEresults) %in% comparisons]
+  for(i in 1:length(comparisons)){
+    DARs <- as.data.frame(tmp[[i]]@results[tmp[[i]]@results$regulation %in% c("up","down"),])
+    uDARs <- unique(c(uDARs, DARs$peakid))
+  }
+  uDARs
+}
+```
+
+### Union of DE genes upregulated (coding in promoter regions)
+
+```{r}
+uDEGup <- function(comparisons){
+  uDEGs <- NULL
+  tmp <- DEresults[names(DEresults) %in% comparisons]
+  for(i in 1:length(comparisons)){
+    DEGs <- as.data.frame(tmp[[i]]@results[tmp[[i]]@results$regulation %in% c("up"),])
+   DEGs <- subset(DEGs, type=='protein_coding')
+  DEGs <- subset(DEGs, DEGs$annotation %in% c("Promoter (<=1kb)", "Promoter (1-2kb)", "Promoter (2-3kb)"))
+    uDEGs <- unique(c(uDEGs, DEGs$symbol))
+  }
+  uDEGs
+}
+```
+
+### Union of DE genes downregulated (coding in promoter regions)
+
+```{r}
+uDEGdown <- function(comparisons){
+  uDEGs <- NULL
+  tmp <- DEresults[names(DEresults) %in% comparisons]
+  for(i in 1:length(comparisons)){
+    DEGs <- as.data.frame(tmp[[i]]@results[tmp[[i]]@results$regulation %in% c("down"),])
+    DEGs <- subset(DEGs, type=='protein_coding')
+    DEGs <- subset(DEGs, DEGs$annotation %in% c("Promoter (<=1kb)", "Promoter (1-2kb)", "Promoter (2-3kb)"))
+    uDEGs <- unique(c(uDEGs, DEGs$symbol))
+  }
+  uDEGs
+}
+```
+
+### GSEA
+
+```{r}
+GSEA <-  function(input, # select DAR data frame for the selected comparison
+                  GeneSets =c("GO","KEGG","DO","Hallmark","cannonicalPathways","Motifs","ImmunoSignatures"),
+                  GOntology = "BP",
+                  up,
+                  down,
+                  pCorrection = "bonferroni", # choose the p-value adjustment method
+                  pvalueCutoff = 0.5, # set the unadj. or adj. p-value cutoff (depending on correction method)
+                  qvalueCutoff = 0.5 # set the q-value cutoff (FDR corrected)
+){
+
+  results <- list()
+
+  OrgDb = org.Hs.eg.db
+
+  # Open in KO
+  entrez_up <- input[input$change==up,]$geneId
+  print(paste("Number of upregulated genes: ",length(entrez_up),sep=""))
+  entrez_down <-input[input$change==down,]$geneId
+  print(paste("Number of downregulated genes: ",length(entrez_down),sep=""))
+
+  # GO enrichment
+  if("GO" %in% GeneSets){
+    print("Performing GO enrichment")
+    results$GOup <- as.data.frame(enrichGO(gene = entrez_up,
+                                           universe = peakAnnotation.filt.df$geneId,
+                                           OrgDb = OrgDb,
+                                           ont = GOntology,
+                                           pAdjustMethod = pCorrection,
+                                           pvalueCutoff  = pvalueCutoff,
+                                           qvalueCutoff  = qvalueCutoff,
+                                           readable      = T))
+
+    results$GOdown <- as.data.frame(enrichGO(gene = entrez_down,
+                                             universe = peakAnnotation.filt.df$geneId,
+                                             OrgDb = OrgDb,
+                                             ont = GOntology,
+                                             pAdjustMethod = pCorrection,
+                                             pvalueCutoff  = pvalueCutoff,
+                                             qvalueCutoff  = qvalueCutoff,
+                                             readable      = T))
+  }
+
+  # KEGG enrichment
+  if("KEGG" %in% GeneSets){
+    print("Performing KEGG enrichment")
+    org = "hsa"
+
+    results$KEGGup <- as.data.frame(enrichKEGG(gene = entrez_up,
+                                               organism = org,
+                                               universe = peakAnnotation.filt.df$geneId,
+                                               pAdjustMethod = pCorrection,
+                                               pvalueCutoff  = pvalueCutoff,
+                                               qvalueCutoff = qvalueCutoff))
+
+    results$KEGGdown <- as.data.frame(enrichKEGG(gene = entrez_down,
+                                                 organism = org,
+                                                 universe = peakAnnotation.filt.df$geneId,
+                                                 pAdjustMethod = pCorrection,
+                                                 pvalueCutoff  = pvalueCutoff,
+                                                 qvalueCutoff = qvalueCutoff))
+  }
+
+  # DO enrichment
+  if("DO" %in% GeneSets){
+    print("Performing Disease Ontology enrichment")
+
+    results$DOup <- as.data.frame(enrichDO(gene = entrez_up,
+                                           universe = peakAnnotation.filt.df$geneId,
+                                           pAdjustMethod = pCorrection,
+                                           pvalueCutoff  = pvalueCutoff,
+                                           qvalueCutoff = qvalueCutoff,
+                                           minGSSize     = 5,
+                                           maxGSSize     = 500,
+                                           readable=TRUE))
+
+    results$DOdown <- as.data.frame(enrichDO(gene = entrez_down,
+                                             universe = peakAnnotation.filt.df$geneId,
+                                             pAdjustMethod = pCorrection,
+                                             pvalueCutoff  = pvalueCutoff,
+                                             qvalueCutoff = qvalueCutoff,
+                                             minGSSize     = 5,
+                                             maxGSSize     = 500,
+                                             readable=TRUE))
+  }
+
+  # Hallmark enrichment
+  if("Hallmark" %in% GeneSets){
+    print("Performing Hallmark enrichment")
+
+    results$HALLMARKup <- as.data.frame(enricher(entrez_up,
+                                                 TERM2GENE=hallmark_genes,
+                                                 universe = peakAnnotation.filt.df$geneId,
+                                                 pAdjustMethod = pCorrection,
+                                                 pvalueCutoff  = pvalueCutoff,
+                                                 qvalueCutoff = qvalueCutoff))
+
+    results$HALLMARKdown <- as.data.frame(enricher(entrez_down,
+                                                   TERM2GENE=hallmark_genes,
+                                                   universe = peakAnnotation.filt.df$geneId,
+                                                   pAdjustMethod = pCorrection,
+                                                   pvalueCutoff  = pvalueCutoff,
+                                                   qvalueCutoff = qvalueCutoff))
+  }
+
+  # Cannonical Pathway enrichment
+  if("cannonicalPathways" %in% GeneSets){
+    print("Performing Cannonical Pathway (C2) enrichment")
+
+    results$cannonicalPathwaysup <- as.data.frame(enricher(entrez_up,
+                                                           TERM2GENE=cannonicalPathway_genes,
+                                                           universe = peakAnnotation.filt.df$geneId,
+                                                           pAdjustMethod = pCorrection,
+                                                           pvalueCutoff  = pvalueCutoff,
+                                                           qvalueCutoff = qvalueCutoff))
+
+    results$cannonicalPathwaysdown <- as.data.frame(enricher(entrez_down,
+                                                             TERM2GENE=cannonicalPathway_genes,
+                                                             universe = peakAnnotation.filt.df$geneId,
+                                                             pAdjustMethod = pCorrection,
+                                                             pvalueCutoff  = pvalueCutoff,
+                                                             qvalueCutoff = qvalueCutoff))
+  }
+
+  # Motif enrichment
+  if("Motifs" %in% GeneSets){
+    print("Performing Motif enrichment")
+
+    results$Motifup <- as.data.frame(enricher(entrez_up,
+                                              TERM2GENE=motifs,
+                                              universe = peakAnnotation.filt.df$geneId,
+                                              pAdjustMethod = pCorrection,
+                                              pvalueCutoff  = pvalueCutoff,
+                                              qvalueCutoff = qvalueCutoff))
+
+    results$Motifdown <- as.data.frame(enricher(entrez_down,
+                                                TERM2GENE=motifs,
+                                                universe = peakAnnotation.filt.df$geneId,
+                                                pAdjustMethod = pCorrection,
+                                                pvalueCutoff  = pvalueCutoff,
+                                                qvalueCutoff = qvalueCutoff))
+  }
+
+  # Immunosignatures enrichment
+  if("ImmunoSignatures" %in% GeneSets){
+    print("Performing immunesignature enrichment")
+
+    results$ImmSigup <- as.data.frame(enricher(entrez_up,
+                                               TERM2GENE=immuno_genes,
+                                               universe = peakAnnotation.filt.df$geneId,
+                                               pAdjustMethod = pCorrection,
+                                               pvalueCutoff  = pvalueCutoff,
+                                               qvalueCutoff = qvalueCutoff))
+
+    results$ImmSigdown <- as.data.frame(enricher(entrez_down,
+                                                 TERM2GENE=immuno_genes,
+                                                 universe = peakAnnotation.filt.df$geneId,
+                                                 pAdjustMethod = pCorrection,
+                                                 pvalueCutoff  = pvalueCutoff,
+                                                 qvalueCutoff = qvalueCutoff))
+  }
+  results
+}
+```
+
+### GSEA dotplot
+
+```{r}
+dotplotGSEA <- function(x,
+                        show=25,
+                        font.size=10,
+                        title.size=10,
+                        title.width=100,
+                        order="count"){
+  if(nrow(x)<1){
+    print("No enrichment found.")
+  }else{
+    x <- if(nrow(x)>show){x[c(1:show),]}else{x}
+    if(order=="padj"){
+    x <- x[order(x$Count,decreasing=FALSE),]
+    x$Description <- ifelse(nchar(x$Description)>50,
+                                 paste(substr(x$Description, 1, 50),"[...]",sep=""),
+                                 x$Description)
+    x$GeneRatio <- factor(x$GeneRatio, levels = unique(x$GeneRatio))
+    x <- x[order(x$p.adjust,decreasing=TRUE),]
+    x$Description <- factor(x$Description, levels = unique(x$Description))
+    }
+    if(order=="count"){
+    x <- x[order(x$Count,decreasing=FALSE),]
+    x$Description <- ifelse(nchar(x$Description)>50,
+                                 paste(substr(x$Description, 1, 50),"[...]",sep=""),
+                                 x$Description)
+    x$Description <- factor(x$Description, levels = unique(x$Description))
+    x$GeneRatio <- factor(x$GeneRatio, levels = unique(x$GeneRatio))
+    }
+    ggplot(x, aes(x = GeneRatio, y = Description, color = p.adjust)) +
+      geom_point(aes(size = Count)) +
+      scale_colour_gradientn(colours=c('red',
+                                       'orange',
+                                       'darkblue',
+                                       'darkblue'),
+                             limits=c(0,1),
+                             values   = c(0,0.05,0.2,0.5,1),
+                             breaks   = c(0.05,0.2,1),
+                             labels = format(c(0.05,0.2,1))) +
+      ylab(NULL) +
+      theme_bw() +
+      theme(text = element_text(size=font.size),
+            plot.title = element_text(size=title.size),
+            axis.text.x = element_text(angle = 90))
+  }
+}
+```
+
+### input GSEA across comparisons
+
+```{r}
+inputcompareGSEA <- function(comp,
+                        organism, # chose organism
+                        GeneSets =c("GO","KEGG"), # choose gene sets for enrichment
+                        ontology= "BP", # define GO subset
+                        pCorrection = "bonferroni", # choose the p-value adjustment method
+                        pvalueCutoff = 0.05, # set the unadj. or adj. p-value cutoff (depending on correction method)
+                        qvalueCutoff = 0.05, # set the q-value cutoff (FDR corrected)
+                        showMax = 20){
+
+  if(organism == "mouse") {
+    OrgDb = org.Mm.eg.db
+  } else if(organism == "human"){
+      OrgDb = org.Hs.eg.db
+  } else {stop("Wrong Organism. Select mouse or human.")}
+
+  ENTREZlist <-  list()
+
+  for(i in 1:length(comp)){
+
+    DE_up <- comp[[i]][["inputUP"]]
+    entrez_up <- bitr(DE_up, fromType = "SYMBOL", toType="ENTREZID", OrgDb=OrgDb)$ENTREZID
+    DE_down <- comp[[i]][["inputDOWN"]]
+    entrez_down <- bitr(DE_down, fromType = "SYMBOL", toType="ENTREZID", OrgDb=OrgDb)$ENTREZID
+    x <- setNames(list(entrez_up, entrez_down),
+                  c(paste(names(comp[i]),"_up",sep=""),
+                    paste(names(comp[i]),"_down",sep="")))
+    ENTREZlist <- c(ENTREZlist,x)
+  }
+
+  list <- list()
+
+  # Compare the Clusters regarding their GO enrichment
+  if("GO" %in% GeneSets){
+    print("Performing GO enrichment")
+    CompareClusters_GO <- compareCluster(geneCluster = ENTREZlist,
+                                       fun = "enrichGO",
+                                       universe = universe_Entrez,
+                                       OrgDb = OrgDb,
+                                       ont = ontology,
+                                       pvalueCutoff  = pvalueCutoff,
+                                       pAdjustMethod = pCorrection,
+                                       qvalueCutoff  = pvalueCutoff,
+                                       readable      = T)
+    list$GOresults <- as.data.frame(CompareClusters_GO)
+    list$GOplot <- clusterProfiler::dotplot(CompareClusters_GO, showCategory = showMax, by = "geneRatio", font.size=10)
+  }
+
+  if("KEGG" %in% GeneSets){
+    print("Performing KEGG enrichment")
+
+    if(organism == "mouse"){org = "mmu"}
+    if(organism == "human"){org = "hsa"}
+
+    # Compare the Clusters regarding their KEGG enrichment
+    CompareClusters_KEGG <- compareCluster(geneCluster = ENTREZlist,
+                                         fun = "enrichKEGG",
+                                         universe = universe_Entrez,
+                                         organism = org,
+                                         pvalueCutoff  = pvalueCutoff,
+                                         pAdjustMethod = pCorrection,
+                                         qvalueCutoff  = pvalueCutoff)
+    list$KEGGresults <- as.data.frame(CompareClusters_KEGG)
+    list$KEGGplot <- clusterProfiler::dotplot(CompareClusters_KEGG, showCategory = showMax, by = "geneRatio", font.size=10)
+  }
+  list
+}
+```
+
+### GSEA dotplot for multiple comparisons
+
+```{r}
+dotplotGSEA_MC <- function(x,
+                        show=25,
+                        font.size=10,
+                        title.size=10,
+                        title.width=100){
+
+    ggplot(x, aes(x = Cluster, y = Description, color = pvalue)) +
+      geom_point(aes(size = Count)) +
+      scale_colour_gradientn(colours=c('red',
+                                       '#FFFF0000',
+                                       '#FFFF0000'),
+                             limits=c(0,1),
+                             values   = c(0,0.05,0.2,1),
+                             breaks   = c(0.05,0.2,1),
+                             labels = format(c(0.05,0.2,1))) +
+      ylab(NULL) +
+      ggtitle(paste(strwrap(unique(x$Enrichment), width=title.width), collapse = "\n"))+
+      theme_bw() +
+      theme(text = element_text(size=font.size),
+            plot.title = element_text(size=title.size))
+  }
+```
+
+### Ranked Fold Change plot
+
+```{r}
+# plotFCrank <- function(comp1,
+#                        comp2){
+#     rank <- na.omit(DEresults[names(DEresults) == comp1][[1]]@results)
+#     rank <- rank[rank$padj < 0.05 , c("GENEID","comparison","log2FoldChange")]
+#     rank <- rank[order(rank$log2FoldChange,decreasing = TRUE),]
+#     rank$rank <- c(1:nrow(rank))
+#     rank2 <- DEresults[names(DEresults) == comp2][[1]]@results
+#     rank2 <- rank2[rownames(rank),c("GENEID","comparison","log2FoldChange")]
+#     rank2$rank <- rank$rank 
+#     rank <- rbind(rank, rank2)
+# 
+#     ggplot(rank,aes(x=rank,y=log2FoldChange,color=comparison)) +
+#       geom_point(alpha=0.5) +
+#       geom_line(aes(group=GENEID),color="grey",alpha=0.2)+
+#       theme_bw() +
+#       ylab("log2(FoldChange)")+
+#       xlab(paste("FC rank of " ,comp1, sep=""))+
+#       geom_hline(yintercept = 0)+
+#       #geom_hline(yintercept = c(log(2,2),-(log(2,2))), colour="firebrick1")+
+#       theme(text = element_text(size=15))+
+#       ggtitle("Comparison of fold changes (comp1 padj<0.05")+ 
+#       theme(legend.position="bottom")
+# }
+```
+
+## ATAC-seq analysis
+
+### Directories
+
+```{r}
+# projectPath <- "/home/caterina/data/alignment/2020-01-23/"
+# bamFilePath <- paste(projectPath,"output/mapped", sep = "")
+# bedFilePath <- paste(projectPath, "output/peaks", sep = "")
+# 
+# analysisPath <- "/home/caterina/data/analysis/"
+```
+
+### Load MisigDB gene sets
+
+```{r}
+# hallmark_genes <- clusterProfiler::read.gmt("/home/caterina/data/analysis/GMTfiles/h.all.v6.2.entrez.gmt")
+# cannonicalPathway_genes <- clusterProfiler::read.gmt("/home/caterina/data/analysis/GMTfiles/c2.cp.v6.2.entrez.gmt")
+# immuno_genes <- clusterProfiler::read.gmt("/home/caterina/data/analysis/GMTfiles/c7.all.v6.2.entrez.gmt")
+# motifs <- clusterProfiler::read.gmt("/home/caterina/data/analysis/GMTfiles/c3.all.v6.2.entrez.gmt")
+```
+
+### Sample Annotation 
+
+```{r}
+# sample_table <- read.delim(paste(analysisPath,"Bonaguro_samples.txt",sep="/"),header=TRUE, stringsAsFactors = TRUE)
+# sample_table$sample <- paste("Sample_",sample_table$ID,sep="")
+# rownames(sample_table) <- sample_table$sample
+# 
+# sample_table$Group <- factor(sample_table$Group, levels=c("BxPC3_DMSO_0h", "BxPC3_THCG20_6h", "BxPC3_AF2_6h", "BxPC3_THCG20_12h", "BxPC3_AF2_12h", "HCT15_DMSO_0h", "HCT15_THCG20_6h", "HCT15_AF2_6h", "HCT15_THCG20_12h", "HCT15_AF2_12h"))
+##AF2: compound B; THCG20:compound M
+```
+
+### Colour scheme customization
+
+```{r}
+# # Sample_name
+# col_Group <-c("#BADA55", "#5AC18E", "#40E0D0", "#065535", "#008080", "#E84808", "#F86018", "#F09020", "#F8C038", "#FFE475")
+# names(col_Group) <- c("BxPC3_DMSO_0h", "BxPC3_THCG20_6h", "BxPC3_AF2_6h", "BxPC3_THCG20_12h", "BxPC3_AF2_12h", "HCT15_DMSO_0h", "HCT15_THCG20_6h", "HCT15_AF2_6h", "HCT15_THCG20_12h", "HCT15_AF2_12h") 
+# 
+# # CellLine
+# col_celltype = c("#BADA55", "#E8480")
+# names(col_celltype) <- c("BxPC3", "HCT15")
+# 
+# # Compound
+# col_compound <- c("#66C3D0", "#008DD2", "#40E0D0")
+# names(col_compound) <- c("DMSO", "THCG20", "AF2")
+# 
+# # Time Point
+# col_time <- c("#E4C8F0", "#FF7FF8", "#BA428F")
+# names(col_time) <- c("0h", "6h", "12h")
+# 
+# ann_colors <- list(sample_Group = col_Group, 
+#                   cell_line = col_celltype, 
+#                   compound = col_compound,
+#                   time_point = col_time)
+```
+
+### Load the RNAseq DE results object 
+
+```{r}
+# # import RNAseq DE object
+# load("/home/caterina/data/analysis/DERNA.rda")
+
+```
+
+### QC of aligned bulk ATAC-seq reads
+
+#### Chromosome coverage
+
+```{r,fig.height=30,fig.width=10}
+# plotList <- list()
+# 
+# for(i in 1:length(sample_table$ID)){
+#   message(dir(path=bamFilePath, pattern = ".final.bam$")[i])
+#   sortedBAM <- dir(path=bamFilePath, pattern = ".final.bam$",full.names = TRUE)[i]
+#   sample <- paste(strsplit(dir(path=bamFilePath, pattern = ".final.bam$")[i],".final.bam")[[1]])
+#   
+#   tmp <- idxstatsBam(sortedBAM)
+#   tmp <- tmp[grepl("chr",tmp$seqnames),]
+#   
+#   plotList[[i]] <- ggplot(tmp, aes(seqnames, mapped)) + 
+#     geom_bar(stat = "identity", fill="#A9DDD9") + 
+#     coord_flip()+
+#     scale_y_continuous()+
+#     xlab("")+
+#     ylab("mapped reads")+
+#     ggtitle(sample)+
+#     theme_bw()
+# }
+# 
+# plot_grid(plotlist = plotList,ncol=3)
+```
+
+### Insert size
+
+```{r,fig.height=24,fig.width=12}
+# plotList <- list()
+# 
+# for(i in 1:length(sample_table$ID)){
+#   message(dir(path=bamFilePath, pattern = ".final_openRegions.bam$")[i])
+#   sortedBAM <- dir(path=bamFilePath, pattern = ".final_openRegions.bam$",full.names = TRUE)[i]
+#   sample <- paste(strsplit(dir(path=bamFilePath, pattern = ".final_openRegions.bam$")[i],"\\.")[[1]][1],sep="")
+#   
+#   atacReads <- readGAlignmentPairs(sortedBAM, 
+#                                    param = ScanBamParam(mapqFilter = 1,
+#                                                         flag = scanBamFlag(isPaired = TRUE, isProperPair = TRUE), 
+#                                                         what = c("qname", 
+#                                                                  "mapq", 
+#                                                                  "isize")))
+#   
+#   atacReads_read1 <- GenomicAlignments::first(atacReads)
+#   insertSizes <- abs(elementMetadata(atacReads_read1)$isize)
+#   
+#   inserts <- table(insertSizes) %>% 
+#     data.frame %>% 
+#     mutate(insertSizes = as.numeric(as.vector(insertSizes)),
+#            Freq = as.numeric(as.vector(Freq)))
+#   
+#   plotList[[i]] <- ggplot(inserts, aes(x = insertSizes, y = Freq)) + 
+#     geom_line()+ 
+#     geom_vline(xintercept = c(180, 247), colour = "red") + 
+#     geom_vline(xintercept = c(315, 437), colour = "darkblue") + 
+#     geom_vline(xintercept = c(100), colour = "darkgreen") + 
+#     ggtitle(sample)+
+#     theme_bw()
+# }
+# 
+# plot_grid(plotlist = plotList,ncol=2)
+```
+
+### Data Import, QC and Processing
+
+#### Import Peaks from bulk ATAC-seq
+
+```{r}
+# # Import the bed files and produce object with counts per peak/gap
+# individualPeaks <- importBEDpeaks(pattern = "[[:digit:]]_peaks.narrowPeak", path = bedFilePath)
+# 
+# # summarize the individual peaks into a consensus peak annotation
+# peakSummary <- unionPeaks(individualPeaks)
+# 
+# # exclude blacklisted regions
+# # dowload here: https://sites.google.com/site/anshulkundaje/projects/blacklists
+# blacklistedRegions <- import.bed(paste(analysisPath,"hg38-blacklist.v2.bed.gz",sep="/"))  
+# PeaksBlacklisted <- countOverlaps(subject = blacklistedRegions,
+#                                   query = peakSummary) != 0
+# 
+# table(PeaksBlacklisted)
+# 
+# peakSummary <- peakSummary[!PeaksBlacklisted]
+# 
+# # define gaps between peaks
+# gapSummary <- gaps(peakSummary)
+# GapsBlacklisted <- countOverlaps(subject = blacklistedRegions,
+#                                  query = gapSummary) != 0
+# table(GapsBlacklisted)
+# gapSummary <- gapSummary[!GapsBlacklisted]
+```
+
+```{r}
+# ### Dataframe of peakPresence
+# peakSummary.df <- as.data.frame(peakSummary@elementMetadata)
+# rownames(peakSummary.df)<- peakSummary@ranges@NAMES
+# colnames(peakSummary.df)<- unlist(lapply(strsplit(colnames(peakSummary.df),split ="_peaks"), function(x) x[[1]]))
+```
+
+##### Peak QC
+
+###### Number of detected peaks per sample
+
+```{r, fig.height=10, fig.width=12}
+# df <- data.frame(detected_peaks=colSums(peakSummary.df))
+# idx <- match(rownames(df),sample_table$sample)
+# df$group <- sample_table$Group[idx]
+# 
+# tbl <- tableGrob(df,
+#                  theme=ttheme_minimal())
+# 
+# p1 <- ggplot(data.frame(detected_peaks=colSums(peakSummary.df),
+#                   sample=colnames(peakSummary.df)), 
+#        aes(y=detected_peaks,x=sample))+
+#   geom_point()+
+#   scale_y_continuous()+
+#   theme_classic()+
+#   theme(axis.text.x = element_text(size=8, angle = 45, hjust = 1))
+# 
+# grid.arrange(p1, tbl,
+#              nrow=1,
+#              as.table=TRUE)
+```
+
+###### Histogram on peak width
+
+```{r, warning=FALSE}
+# ggplot(data.frame(peakSummary@ranges), aes(width)) + 
+#   geom_histogram(aes(y=..count..),binwidth = 10,fill="#A9DDD9")+
+#   scale_x_continuous(limits=c(0,1000),breaks=c(0,200,500,1000))+
+#   geom_text(aes(900, 200, label = paste(sum(data.frame(peakSummary@ranges)$width>1000),">",sep=""), 
+#                 vjust = -0.5), col = "black")+
+#   theme_classic()
+```
+
+### Import Counts
+
+```{r,warning=FALSE}
+# # count reads from bam files in peak regions
+# countsPerPeak <- peakCountTable(peaks = peakSummary, 
+#                                    path = bamFilePath, 
+#                                    pattern = ".final_openRegions.bam$")
+# #write peak counts into data frame
+# countsPerPeak.df <- as.data.frame(assay(countsPerPeak))
+```
+
+```{r,warning=FALSE}
+# # count reads from bam files in gap regions
+# countsPerGap <- peakCountTable(peaks = gapSummary, 
+#                                path = bamFilePath, 
+#                                pattern = ".final_openRegions.bam$")
+# 
+# #write gap counts into data frame
+# countsPerGap.df <- as.data.frame(assay(countsPerGap))
+```
+
+##### QC 
+
+```{r}
+# # Count Statistics
+# totalPeakLength <- sum(as.numeric(width(peakSummary)))
+# totalPeakNumber <- length(peakSummary)
+# meanPeakLength <- round(totalPeakLength/totalPeakNumber,3)
+# totalPeakReads <- colSums(countsPerPeak.df)
+# meanReadsperPeak <- round(totalPeakReads/totalPeakNumber,3)
+# PeakReadsperBase <- totalPeakReads/totalPeakLength
+# 
+# # Gap statistics
+# totalGapLength <- sum(as.numeric(width(gapSummary)))
+# totalGapNumber <- length(gapSummary)
+# meanGapLength <- round(totalGapLength/totalGapNumber,3)
+# totalGapReads <- colSums(assay(countsPerGap))
+# meanReadsperGap <- round(totalGapReads/totalGapNumber,3)
+# GapReadsperBase <- totalGapReads/totalGapLength
+# 
+# summary.stats <- data.frame("totalPeakLength"=totalPeakLength,
+#                            "totalGapLength"=totalGapLength,
+#                             "totalPeakNumber"=totalPeakNumber,
+#                             "totalReads" = totalPeakReads+totalGapReads,
+#                             "totalPeakReads" = totalPeakReads,
+#                             "totalGapReads" = totalGapReads,
+#                             "meanReadsperPeak"= meanReadsperPeak,
+#                             "meanReadsperGap" = meanReadsperGap,
+#                             "PeakReadsperBase"=round(PeakReadsperBase,3),
+#                             "GapReadsperBase"= round(GapReadsperBase,3),
+#                             "CoverageRatio" = round(PeakReadsperBase/GapReadsperBase,3))
+# 
+# idx <- match(rownames(summary.stats), sample_table$sample)
+# summary.stats$time <- sample_table$Time[idx]
+# summary.stats$group <- sample_table$Group[idx]
+# summary.stats$celltype <- sample_table$Celltype[idx]
+# 
+# summary.stats
+```
+
+```{r,fig.width=24,fig.height=6}
+# tmp <- melt(countsPerPeak.df)
+# idx <- match(tmp$variable,sample_table$sample)
+# tmp$group <- sample_table$Group[idx]
+# 
+# p1 <- ggplot(tmp, aes(x= variable, y= value+1, fill= group))+
+#   geom_boxplot() +
+#   scale_y_log10()+
+#   ylab("log10(Count+1)")+
+#   xlab("") +
+#   theme_classic()+
+#   theme(axis.text.x = element_text(size=8, angle = 45, hjust = 1),
+#         plot.title = element_text(size = 8, face = "bold"))
+# 
+# p2 <- ggplot(summary.stats, aes(x= group, y= totalPeakReads,
+#                                 fill=group))+
+#   geom_boxplot() +
+#   geom_jitter(aes(shape=celltype)) +
+#   ylab("Total Peak Counts")+
+#   xlab("") +
+#   theme_classic()+
+#   theme(axis.text.x = element_text(size=8, angle = 45, hjust = 1),
+#         plot.title = element_text(size = 8, face = "bold"))
+# 
+# # visualize the ratio of reads in peaks and in gaps
+# p3 <- ggplot(summary.stats, aes(x = group, y = CoverageRatio, fill=group)) +
+#   geom_boxplot() +
+#   geom_jitter(aes(shape=celltype)) +
+#   ylab("Reads in Peaks/Reads in Gaps")+
+#   xlab("") +
+#   theme_classic()+
+#   theme(axis.text.x = element_text(size=8, angle = 45, hjust = 1),
+#         plot.title = element_text(size = 8, face = "bold"))
+# 
+# plot_grid(p1, p2, p3, ncol=2, rel_widths = c(2.3,1))
+```
+
+##### Histogram of rowSums
+
+```{r,fig.height=4,fig.width=8, warning=FALSE}
+# countStats <- data.frame(row.names=rownames(countsPerPeak.df),
+#                          mean=rowMeans(countsPerPeak.df),
+#                          sum=rowSums(countsPerPeak.df))
+# 
+# p1 <-ggplot(countStats, aes(mean)) + 
+#   geom_histogram(binwidth = 1, fill= "#A9DDD9")+
+#   scale_x_continuous(limits=c(0,500))+
+#   geom_text(aes(450, 1000, label = paste(sum(countStats$mean>500),">",sep=""), vjust = -0.5), col = "black")+
+#   theme_classic()
+# 
+# p2 <-ggplot(countStats, aes(sum)) + 
+#   geom_histogram(binwidth = 10, fill= "#A9DDD9")+
+#   scale_x_continuous(limits=c(0,5000))+
+#   geom_text(aes(4950, 200, label = paste(sum(countStats$sum>5000),">",sep=""), vjust = -0.5), col = "black")+
+#   geom_vline(xintercept=10)+
+#   theme_classic()
+# 
+# plot_grid(p1, p2, labels=list("Mean","Sum"), 
+#           label_x = 0.5, label_y = 0.9, hjust = -0.5, vjust = -0.5)
+```
+
+##### Correlation of peak counts 
+
+```{r,warning=FALSE ,fig.width=16,fig.height=12}
+# countCor <- cor(countsPerPeak.df)
+# 
+# corBreaks <- c(0,seq(0.8,1,by = 0.01))
+# pheatmap(countCor,
+#          main="Sample Correlation based on unnormalized counts per peaks",
+#          annotation_row = sample_table[,"Group",drop=FALSE], 
+#          annotation_col = sample_table[,"Group",drop=FALSE],
+#          show_rownames = T,
+#          fontsize = 10,
+#          display_numbers=TRUE,
+#          color = colorRampPalette(rev(brewer.pal(n = length(corBreaks), name = "RdYlBu")))(length(corBreaks)),
+#          breaks = corBreaks)
+```
+
+### Filter Peaks
+
+```{r}
+# peaks2keep <- rownames(countsPerPeak.df[rowMax(as.matrix(countsPerPeak.df))>20,])
+# length(peaks2keep)
+# 
+# # filter peaks
+# peakSummary.filt <- peakSummary[peaks2keep]
+# peakSummary.filt.df <- peakSummary.df[rownames(peakSummary.df) %in% peaks2keep,]
+# 
+# # filter counts
+# countsPerPeak.filt.df <- countsPerPeak.df[peaks2keep,]
+```
+
+### Peak Annotation - ChIPseeker
+
+We can use the chipseeker library to identify genes closest to our regions and to give us simple summaries and visualisations of this annotation.
+
+We use the gene models from TxDb.Hsapiens.UCSC.hg38.knownGene and supply this to ChIPseeker packages annotatePeak function.
+
+#### Genomic distribution
+
+```{r, fig.height=16,fig.width=8}
+# peakSummary.filt$sum <- as.vector(rowSums(countsPerPeak.filt.df))
+# covplot(peakSummary.filt, weightCol="sum",title = "ATAC peaks over Chromosomes")
+```
+
+#### Relative localization to nearest gene
+
+```{r,warning=FALSE}
+# # complete peak set
+# peakAnnotation <- annotatePeak(peakSummary, TxDb = TxDb.Hsapiens.UCSC.hg38.knownGene, level="gene")
+# peakAnnotation.df <- as.data.frame(as.GRanges(peakAnnotation))
+# 
+# # filtered peak set
+# peakAnnotation.filt <- annotatePeak(peakSummary.filt, TxDb = TxDb.Hsapiens.UCSC.hg38.knownGene, level="gene")
+# peakAnnotation.filt.df <- as.data.frame(as.GRanges(peakAnnotation.filt))
+```
+
+##### PieChart {.tabset .tabset-fade}
+
+###### All peaks
+
+```{r}
+# plotAnnoPie(peakAnnotation)
+```
+
+###### Filtered peaks
+
+```{r}
+# plotAnnoPie(peakAnnotation.filt)
+```
+
+##### VennPie {.tabset .tabset-fade}
+
+###### All peaks
+
+```{r}
+# vennpie(peakAnnotation)
+```
+
+###### Filtered peaks
+
+```{r}
+# vennpie(peakAnnotation.filt)
+```
+
+##### Distance to TSS {.tabset .tabset-fade}
+
+###### All peaks
+
+```{r, fig.height=2, fig.width=8}
+# plotDistToTSS(peakAnnotation,title = "Distribution of ATAC peaks relative to TSS")
+```
+
+###### Filtered peaks
+
+```{r, fig.height=2, fig.width=8}
+# plotDistToTSS(peakAnnotation.filt,title = "Distribution of ATAC peaks relative to TSS")
+```
+
+###### Histogram
+
+```{r, fig.width=12, fig.height=6, warning=FALSE}
+# p1 <- ggplot(data=peakAnnotation.df, aes(peakAnnotation.df$distanceToTSS)) + 
+#   geom_histogram(aes(y=..count..), colour="black", fill="#FF6666", binwidth = 10)+
+#   scale_x_continuous(limits=c(-1000,1000))+
+#   scale_y_continuous(limits=c(0,1000), oob = scales::squish)+
+#   geom_text(aes(100, 800, label=paste(">",sum(peakAnnotation.df$distanceToTSS==0),sep=""), vjust = -0.5), col="red")+
+#   labs(x="Distance to TSS", y="Count")+
+#   theme_bw()
+# 
+# p2 <- ggplot(data=peakAnnotation.filt.df, aes(peakAnnotation.filt.df$distanceToTSS)) + 
+#   geom_histogram(aes(y=..count..), colour="black", fill="#FF6666", binwidth = 10)+
+#   scale_x_continuous(limits=c(-1000,1000))+
+#   scale_y_continuous(limits=c(0,1000), oob = scales::squish)+
+#   geom_text(aes(100, 800, label=paste(">",sum(peakAnnotation.filt.df$distanceToTSS==0),sep=""), vjust = -0.5), col="red")+
+#   labs(x="Distance to TSS", y="Count")+
+#   theme_bw()
+# 
+# plot_grid(p1, p2, labels=list("All peaks","Filtered peaks"),ncol=1,
+#           label_x = 0.8, label_y = 0.8, hjust = -0.5, vjust = -0.5)
+```
+
+#### Add gene symbol to peak annotation
+
+The peak annotation contains entrez IDs, which are very hard to read. Thus, we add gene symbols to the annotation using the ensembl biomart data base (http://www.ensembl.org/). 
+
+```{r}
+# # Access ensembl data base and download relevant information:
+# 
+# ensembl <- useMart("ensembl",dataset="hsapiens_gene_ensembl")
+# 
+# bm <- getBM(attributes = c("entrezgene_id",
+#                            "external_gene_name", 
+#                           "description", 
+#                            "gene_biotype"),
+#             mart = ensembl)
+# 
+# IDindex <- match(peakAnnotation.df$geneId, bm$entrezgene_id)
+# 
+# peakAnnotation.df$symbol <- bm$external_gene_name[IDindex]
+# peakAnnotation.df$description <- bm$description[IDindex]
+# peakAnnotation.df$type <- bm$gene_biotype[IDindex]
+# 
+# IDindex <- match(peakAnnotation.filt.df$geneId, bm$entrezgene_id)
+# 
+# peakAnnotation.filt.df$symbol <- bm$external_gene_name[IDindex]
+# peakAnnotation.filt.df$description <- bm$description[IDindex]
+# peakAnnotation.filt.df$type <- bm$gene_biotype[IDindex]
+```
+
+### DESeq2 analysis of peak counts
+
+#### DESeq2 object
+
+```{r}
+# produce DESeq data set
+# dds <- DESeqDataSetFromMatrix(countData = countsPerPeak.filt.df,
+#                               colData = sample_table,
+#                               design = ~ Group) # change the design
+```
+
+#### Calculate DESeq2 Statistics
+
+```{r}
+# dds <- DESeq(dds,quiet = FALSE)
+```
+
+#### Normalized count table
+
+```{r}
+# #write table of normalized counts
+# norm <- as.data.frame(counts(dds, normalized=T))
+# identical(rownames(norm), rownames(peakAnnotation.filt.df))
+# norm_anno <- norm
+# norm_anno$peakid <- row.names(norm_anno)
+# 
+# norm_anno <- cbind(norm_anno,peakAnnotation.filt.df[,c(1:3,36:47)])
+# 
+# #write.csv(norm_anno, "norm_anno_ATAC_revised.csv")
+```
+
+#### Variance Stabilization
+
+```{r}
+# dds_vst <- vst(dds, blind = FALSE)
+# 
+# norm_vst <- as.matrix(assay(dds_vst))
+# norm_vst <- as.data.frame(norm_vst)
+# identical(rownames(norm_vst),rownames(peakAnnotation.filt.df))
+# 
+# norm_anno_vst <- cbind(norm_vst,peakAnnotation.filt.df[,c(1:3,36:47)])
+# norm_anno_vst$peakid <- row.names(norm_anno_vst)
+```
+
+## Principal Component Analysis (Fig. 4 supplement 1 B)
+
+```{r, fig.height=6, fig.width=14}
+p1 <- plotPCA(pca_input = dds_vst,
+              ntop="all", 
+              xPC=1, 
+              yPC=2,
+              point_size=5,
+              title="",
+              color="Group",
+              anno_color=col_Group)
+
+p2 <- plotPCA(pca_input = dds_vst,
+              ntop="all", 
+              xPC=2, 
+              yPC=3,
+              point_size=5,
+              title="",
+              color="Group",
+              anno_color=col_Group)
+
+plot(p2)
+```
+
+# Define relevant comparisons
+
+```{r}
+# comparison_table<-data.frame(comparison = c("BxPC3_THCG20_6h","BxPC3_THCG20_12h","BxPC3_AF2_6h", "BxPC3_AF2_12h", "HCT15_THCG20_6h","HCT15_THCG20_12h","HCT15_AF2_6h", "HCT15_AF2_12h", "BxPC3_DMSO_0h"),
+#                              control = c("BxPC3_DMSO_0h","BxPC3_DMSO_0h","BxPC3_DMSO_0h", "BxPC3_DMSO_0h", "HCT15_DMSO_0h","HCT15_DMSO_0h","HCT15_DMSO_0h", "HCT15_DMSO_0h", "HCT15_DMSO_0h"))
+```
+
+# Perform Differential Expression Testing
+
+```{r}
+# DEresults <- DEAnalysis(condition = "Group",
+#                         alpha=0.05 ,
+#                         lfcThreshold= 0,
+#                         sigFC = 1,
+#                         multiple_testing="none",
+#                         shrinkage = TRUE,
+#                         shrinkType="normal")
+```
+
+### Summary of DARs (Fig. 4 B)
+
+```{r}
+#all DARs
+
+DEcounts <- NULL
+
+for(i in 1:nrow(comparison_table)){
+  tmp <- unlist(DEresults[[1+i]]@Number_DE_genes)
+  DEcounts <- rbind(DEcounts, tmp)
+}
+
+rownames(DEcounts) <- names(DEresults)[-1]
+
+DEcounts
+DEcountsDF <- data.frame(DEcounts)
+
+#up protein coding promoter DARs
+
+DEcounts_coding_up <- NULL
+
+for(i in 1:nrow(comparison_table)){
+  tmp <- DEresults[[1+i]]@DE_genes[["up_regulated_Genes"]]
+  tmp <- subset(tmp, tmp$type=="protein_coding")
+  tmp <- subset(tmp, tmp$annotation %in% c("Promoter (<=1kb)", "Promoter (1-2kb)", "Promoter (2-3kb)"))
+  tmp <- unique(unlist(tmp$peakid))
+  tmp <- length(tmp)
+  DEcounts_coding_up <- rbind(DEcounts_coding_up, tmp)
+}
+
+rownames(DEcounts_coding_up) <- names(DEresults)[-1]
+DEcounts_coding_up <- data.frame(DEcounts_coding_up)
+
+#down protein coding promoter DARs
+
+DEcounts_coding_down <- NULL
+
+for(i in 1:nrow(comparison_table)){
+  tmp <- DEresults[[1+i]]@DE_genes[["down_regulated_Genes"]]
+  tmp <- subset(tmp, tmp$type=="protein_coding")
+  tmp <- subset(tmp, tmp$annotation %in% c("Promoter (<=1kb)", "Promoter (1-2kb)", "Promoter (2-3kb)"))
+  tmp <- unique(unlist(tmp$peakid))
+  tmp <- length(tmp)
+  DEcounts_coding_down <- rbind(DEcounts_coding_down, tmp)
+}
+
+rownames(DEcounts_coding_down) <- names(DEresults)[-1]
+
+DEcounts_coding <- data.frame(DEcounts_coding_up, DEcounts_coding_down, DEcountsDF)
+
+names(DEcounts_coding)[1] <- "up_regulated_coding"
+names(DEcounts_coding)[2] <- "down_regulated_coding"
+
+#HCT15
+DEcounts_coding_H<-subset(DEcounts_coding[5:8,])
+DEcounts_coding_H$Comp <- rownames(DEcounts_coding_H)
+
+DEcounts_coding_H<-melt(DEcounts_coding_H)
+DEcounts_coding_H$variable<- factor(DEcounts_coding_H$variable, levels=c("up_regulated_Genes", "up_regulated_coding", "down_regulated_Genes", "down_regulated_coding"))
+DEcounts_coding_H$Comp<- factor(DEcounts_coding_H$Comp, levels=c("HCT15_THCG20_6h_vs_HCT15_DMSO_0h", "HCT15_AF2_6h_vs_HCT15_DMSO_0h", "HCT15_THCG20_12h_vs_HCT15_DMSO_0h", "HCT15_AF2_12h_vs_HCT15_DMSO_0h"))
+
+#BxPC3
+DEcounts_coding_B<-subset(DEcounts_coding[1:4,])
+DEcounts_coding_B$Comp <- rownames(DEcounts_coding_B)
+
+DEcounts_coding_B<-melt(DEcounts_coding_B)
+DEcounts_coding_B$variable<- factor(DEcounts_coding_B$variable, levels=c("up_regulated_Genes", "up_regulated_coding", "down_regulated_Genes", "down_regulated_coding"))
+DEcounts_coding_B$Comp<- factor(DEcounts_coding_B$Comp, levels=c("BxPC3_THCG20_6h_vs_BxPC3_DMSO_0h", "BxPC3_AF2_6h_vs_BxPC3_DMSO_0h", "BxPC3_THCG20_12h_vs_BxPC3_DMSO_0h", "BxPC3_AF2_12h_vs_BxPC3_DMSO_0h"))
+
+ggplot(DEcounts_coding_H, aes(Comp, value, fill=(variable)))+
+  geom_bar(position = "dodge", stat="identity")+
+  scale_fill_manual(values=c("#FF3232", "#990000", "#0000FF", "#00007F"))+
+  theme_classic()+
+  scale_y_continuous(limits=c(0,4500))
+
+ggplot(DEcounts_coding_B, aes(Comp, value, fill=(variable)))+
+  geom_bar(position = "dodge", stat="identity")+
+  scale_fill_manual(values=c("#FF3232", "#990000", "#0000FF", "#00007F"))+
+  theme_classic()+
+  scale_y_continuous(limits=c(0,4500))
+```
+
+# Get all DARs (coding in promoter regions)
+
+```{r}
+ATAC_uDEG_promo <- uDEG(comparisons=c("BxPC3_THCG20_6h_vs_BxPC3_DMSO_0h", "BxPC3_THCG20_12h_vs_BxPC3_DMSO_0h", "BxPC3_AF2_6h_vs_BxPC3_DMSO_0h", "BxPC3_AF2_12h_vs_BxPC3_DMSO_0h", "HCT15_THCG20_6h_vs_HCT15_DMSO_0h", "HCT15_THCG20_12h_vs_HCT15_DMSO_0h", "HCT15_AF2_6h_vs_HCT15_DMSO_0h", "HCT15_AF2_12h_vs_HCT15_DMSO_0h"))
+ATAC_uDEG_promo <- data.frame(ATAC_uDEG_promo)
+```
+
+## Export top 1000 variable DARs (coding in promoter regions)
+
+```{r}
+ATAC_upeaks <- uDAR(comparisons=c("BxPC3_THCG20_6h_vs_BxPC3_DMSO_0h", "BxPC3_THCG20_12h_vs_BxPC3_DMSO_0h", "BxPC3_AF2_6h_vs_BxPC3_DMSO_0h", "BxPC3_AF2_12h_vs_BxPC3_DMSO_0h", "HCT15_THCG20_6h_vs_HCT15_DMSO_0h", "HCT15_THCG20_12h_vs_HCT15_DMSO_0h", "HCT15_AF2_6h_vs_HCT15_DMSO_0h", "HCT15_AF2_12h_vs_HCT15_DMSO_0h"))
+norm_anno_vst_upeaks <- norm_anno_vst[norm_anno_vst$peakid %in% ATAC_upeaks, ]
+norm_anno_vst_upeaks$var <- rowVars(norm_anno_vst_upeaks[ ,1:30])
+norm_anno_vst_upeaks <- arrange(norm_anno_vst_upeaks, desc(var))
+norm_anno_vst_upeaks <- norm_anno_vst_upeaks[ !duplicated(norm_anno_vst_upeaks$symbol), ]
+norm_anno_vst_upeaks <- norm_anno_vst_upeaks[1:1000,]
+ATAC_uDEG_topK <- unique(c(norm_anno_vst_upeaks$symbol))
+
+#saveRDS(ATAC_uDEG_topK, "/home/caterina/data/analysis/objects/ATAC_uDEG_topK.rds") 
+```
+
+### UpsetPlot on DARs (Fig. 4 supplement 1 C)
+
+```{r}
+B_T_6_UP <- DEresults[["BxPC3_THCG20_6h_vs_BxPC3_DMSO_0h"]]@DE_genes[["up_regulated_Genes"]]
+#B_T_6_UP <- subset(B_T_6_UP, type=="protein_coding")
+B_T_6_UP <-  as.character(unique(B_T_6_UP$peakid))
+
+B_A_6_UP <- DEresults[["BxPC3_AF2_6h_vs_BxPC3_DMSO_0h"]]@DE_genes[["up_regulated_Genes"]]
+#B_A_6_UP <- subset(B_A_6_UP, type=="protein_coding")
+B_A_6_UP <-  as.character(unique(B_A_6_UP$peakid))
+
+B_T_12_UP <- DEresults[["BxPC3_THCG20_12h_vs_BxPC3_DMSO_0h"]]@DE_genes[["up_regulated_Genes"]]
+#B_T_12_UP <- subset(B_T_12_UP, type=="protein_coding")
+B_T_12_UP <-  as.character(unique(B_T_12_UP$peakid))
+
+B_A_12_UP <- DEresults[["BxPC3_AF2_12h_vs_BxPC3_DMSO_0h"]]@DE_genes[["up_regulated_Genes"]]
+#B_A_12_UP <- subset(B_A_12_UP, type=="protein_coding")
+B_A_12_UP <-  as.character(unique(B_A_12_UP$peakid))
+
+B_T_6_DOWN <- DEresults[["BxPC3_THCG20_6h_vs_BxPC3_DMSO_0h"]]@DE_genes[["down_regulated_Genes"]]
+#B_T_6_DOWN <- subset(B_T_6_DOWN, type=="protein_coding")
+B_T_6_DOWN <-  as.character(unique(B_T_6_DOWN$peakid))
+
+B_A_6_DOWN <- DEresults[["BxPC3_AF2_6h_vs_BxPC3_DMSO_0h"]]@DE_genes[["down_regulated_Genes"]]
+#B_A_6_DOWN <- subset(B_A_6_DOWN, type=="protein_coding")
+B_A_6_DOWN <-  as.character(unique(B_A_6_DOWN$peakid))
+
+B_T_12_DOWN <- DEresults[["BxPC3_THCG20_12h_vs_BxPC3_DMSO_0h"]]@DE_genes[["down_regulated_Genes"]]
+#B_T_12_DOWN <- subset(B_T_12_DOWN, type=="protein_coding")
+B_T_12_DOWN <-  as.character(unique(B_T_12_DOWN$peakid))
+
+B_A_12_DOWN <- DEresults[["BxPC3_AF2_12h_vs_BxPC3_DMSO_0h"]]@DE_genes[["down_regulated_Genes"]]
+#B_A_12_DOWN <- subset(B_A_12_DOWN, type=="protein_coding")
+B_A_12_DOWN <-  as.character(unique(B_A_12_DOWN$peakid))
+
+H_T_6_UP <- DEresults[["HCT15_THCG20_6h_vs_HCT15_DMSO_0h"]]@DE_genes[["up_regulated_Genes"]]
+#H_T_6_UP <- subset(H_T_6_UP, type=="protein_coding")
+H_T_6_UP <-  as.character(unique(H_T_6_UP$peakid))
+
+H_A_6_UP <- DEresults[["HCT15_AF2_6h_vs_HCT15_DMSO_0h"]]@DE_genes[["up_regulated_Genes"]]
+#H_A_6_UP <- subset(H_A_6_UP, type=="protein_coding")
+H_A_6_UP <-  as.character(unique(H_A_6_UP$peakid))
+
+H_T_12_UP <- DEresults[["HCT15_THCG20_12h_vs_HCT15_DMSO_0h"]]@DE_genes[["up_regulated_Genes"]]
+#H_T_12_UP <- subset(H_T_12_UP, type=="protein_coding")
+H_T_12_UP <-  as.character(unique(H_T_12_UP$peakid))
+
+H_A_12_UP <- DEresults[["HCT15_AF2_12h_vs_HCT15_DMSO_0h"]]@DE_genes[["up_regulated_Genes"]]
+#H_A_12_UP <- subset(H_A_12_UP, type=="protein_coding")
+H_A_12_UP <-  as.character(unique(H_A_12_UP$peakid))
+
+H_T_6_DOWN <- DEresults[["HCT15_THCG20_6h_vs_HCT15_DMSO_0h"]]@DE_genes[["down_regulated_Genes"]]
+#H_T_6_DOWN <- subset(H_T_6_DOWN, type=="protein_coding")
+H_T_6_DOWN <-  as.character(unique(H_T_6_DOWN$peakid))
+
+H_A_6_DOWN <- DEresults[["HCT15_AF2_6h_vs_HCT15_DMSO_0h"]]@DE_genes[["down_regulated_Genes"]]
+#H_A_6_DOWN <- subset(H_A_6_DOWN, type=="protein_coding")
+H_A_6_DOWN <-  as.character(unique(H_A_6_DOWN$peakid))
+
+H_T_12_DOWN <- DEresults[["HCT15_THCG20_12h_vs_HCT15_DMSO_0h"]]@DE_genes[["down_regulated_Genes"]]
+#H_T_12_DOWN <- subset(H_T_12_DOWN, type=="protein_coding")
+H_T_12_DOWN <-  as.character(unique(H_T_12_DOWN$peakid))
+
+H_A_12_DOWN <- DEresults[["HCT15_AF2_12h_vs_HCT15_DMSO_0h"]]@DE_genes[["down_regulated_Genes"]]
+#H_A_12_DOWN <- subset(H_A_12_DOWN, type=="protein_coding")
+H_A_12_DOWN <-  as.character(unique(H_A_12_DOWN$peakid))
+
+combined_up_input <- list(B_T_6_UP = B_T_6_UP,
+                          B_A_6_UP = B_A_6_UP,
+                          B_T_12_UP = B_T_12_UP,
+                          B_A_12_UP = B_A_12_UP,
+                          H_T_6_UP = H_T_6_UP,
+                          H_A_6_UP = H_A_6_UP,
+                          H_T_12_UP = H_T_12_UP,
+                          H_A_12_UP = H_A_12_UP)
+
+combined_down_input <- list(B_T_6_DOWN = B_T_6_DOWN,
+                          B_A_6_DOWN = B_A_6_DOWN,
+                          B_T_12_DOWN = B_T_12_DOWN,
+                          B_A_12_DOWN = B_A_12_DOWN,
+                          H_T_6_DOWN = H_T_6_DOWN,
+                          H_A_6_DOWN = H_A_6_DOWN,
+                          H_T_12_DOWN = H_T_12_DOWN,
+                          H_A_12_DOWN = H_A_12_DOWN)
+
+library(UpSetR)
+upset(fromList(combined_up_input), nsets = 8, sets = c("H_A_12_UP", "H_T_12_UP", "H_A_6_UP", "H_T_6_UP", "B_A_12_UP", "B_T_12_UP", "B_A_6_UP", "B_T_6_UP"), nintersects = 30, keep.order = T, order.by = "freq", mainbar.y.max = 1250)
+
+upset(fromList(combined_down_input), nsets = 8, sets = c("H_A_12_DOWN", "H_T_12_DOWN", "H_A_6_DOWN", "H_T_6_DOWN", "B_A_12_DOWN", "B_T_12_DOWN", "B_A_6_DOWN", "B_T_6_DOWN"), nintersects = 30, keep.order = T, order.by = "freq", mainbar.y.max = 1250) 
+```
+
+### Heatmap (HM) of cell-specific DAR-associated genes (Fig. 4 C and supplement 1 D)
+
+Here we format data as input for heatmaps on DAR-associated genes. We first obtain the time and cell-specific union of DARs (protein coding in promoter regions). Then, norm_anno rowmeans are calculated per each condition (among triplicates) as reference values to be plotted. Unique peaks-associated genes are selected based on the highest variance in the specific cell line.
+
+```{r}
+norm_anno_rowmeans <- norm_anno
+norm_anno_rowmeans <- subset(norm_anno_rowmeans, norm_anno$type == "protein_coding" & norm_anno$annotation %in% c("Promoter (<=1kb)", "Promoter (1-2kb)", "Promoter (2-3kb)"))
+norm_anno_rowmeans_B <- norm_anno_rowmeans[,c(1:6, 13:15, 19:24, 44)]
+norm_anno_rowmeans_H <- norm_anno_rowmeans[,c(7:12, 16:18, 25:30, 44)]
+
+#6h B and H specific DARs (protein coding in promoters)
+
+B_6h <- uDAR(comparisons=c("BxPC3_THCG20_6h_vs_BxPC3_DMSO_0h", "BxPC3_AF2_6h_vs_BxPC3_DMSO_0h"))
+H_6h <- uDAR(comparisons=c("HCT15_THCG20_6h_vs_HCT15_DMSO_0h", "HCT15_AF2_6h_vs_HCT15_DMSO_0h"))
+common_6h <- intersect(B_6h, H_6h)
+B_6h <- unique(setdiff(B_6h, common_6h))
+H_6h <- unique(setdiff(H_6h, common_6h))
+BxPC3_DE_6h_norm <- norm_anno_rowmeans_B[rownames(norm_anno_rowmeans_B) %in% B_6h,]
+BxPC3_DE_6h_norm$var <- rowVars(BxPC3_DE_6h_norm[ ,1:15])
+BxPC3_DE_6h_norm <- arrange(BxPC3_DE_6h_norm, desc(var)) 
+BxPC3_DE_6h_norm <- BxPC3_DE_6h_norm[ !duplicated(BxPC3_DE_6h_norm$symbol), ]
+BxPC3_DE_6h_norm <- drop_na(BxPC3_DE_6h_norm) 
+rownames(BxPC3_DE_6h_norm) <- BxPC3_DE_6h_norm$symbol
+BxPC3_DE_6h_norm$symbol <- NULL
+BxPC3_DE_6h_norm$var <- NULL
+
+HCT15_DE_6h_norm <- norm_anno_rowmeans_H[rownames(norm_anno_rowmeans_H) %in% H_6h,]
+HCT15_DE_6h_norm$var <- rowVars(HCT15_DE_6h_norm[ ,1:15])
+HCT15_DE_6h_norm <- arrange(HCT15_DE_6h_norm, desc(var)) 
+HCT15_DE_6h_norm <- HCT15_DE_6h_norm[ !duplicated(HCT15_DE_6h_norm$symbol), ]
+HCT15_DE_6h_norm <- drop_na(HCT15_DE_6h_norm) 
+rownames(HCT15_DE_6h_norm) <- HCT15_DE_6h_norm$symbol
+HCT15_DE_6h_norm$symbol <- NULL
+HCT15_DE_6h_norm$var <- NULL
+
+#12h B and H specific DARs
+
+B_12h <- uDAR(comparisons=c("BxPC3_THCG20_12h_vs_BxPC3_DMSO_0h", "BxPC3_AF2_12h_vs_BxPC3_DMSO_0h"))
+H_12h <- uDAR(comparisons=c("HCT15_THCG20_12h_vs_HCT15_DMSO_0h", "HCT15_AF2_12h_vs_HCT15_DMSO_0h"))
+common_12h <- intersect(B_12h, H_12h)
+B_12h <- unique(setdiff(B_12h, common_12h))
+H_12h <- unique(setdiff(H_12h, common_12h))
+BxPC3_DE_12h_norm <- norm_anno_rowmeans_B[rownames(norm_anno_rowmeans_B) %in% B_12h ,]
+BxPC3_DE_12h_norm$var <- rowVars(BxPC3_DE_12h_norm[ ,1:15])
+BxPC3_DE_12h_norm <- arrange(BxPC3_DE_12h_norm, desc(var)) 
+BxPC3_DE_12h_norm <- BxPC3_DE_12h_norm[ !duplicated(BxPC3_DE_12h_norm$symbol), ]
+BxPC3_DE_12h_norm <- drop_na(BxPC3_DE_12h_norm) 
+rownames(BxPC3_DE_12h_norm) <- BxPC3_DE_12h_norm$symbol
+BxPC3_DE_12h_norm$symbol <- NULL
+BxPC3_DE_12h_norm$var <- NULL
+
+HCT15_DE_12h_norm <- norm_anno_rowmeans_H[rownames(norm_anno_rowmeans_H) %in% H_12h,]
+HCT15_DE_12h_norm$var <- rowVars(HCT15_DE_12h_norm[ ,1:15])
+HCT15_DE_12h_norm <- arrange(HCT15_DE_12h_norm, desc(var)) 
+HCT15_DE_12h_norm <- HCT15_DE_12h_norm[ !duplicated(HCT15_DE_12h_norm$symbol), ]
+HCT15_DE_12h_norm <- drop_na(HCT15_DE_12h_norm) 
+rownames(HCT15_DE_12h_norm) <- HCT15_DE_12h_norm$symbol
+HCT15_DE_12h_norm$symbol <- NULL
+HCT15_DE_12h_norm$var <- NULL
+
+#6h rowmeans
+
+BxPC3_DE_6h_norm <- scale(t(BxPC3_DE_6h_norm))
+BxPC3_DE_6h_norm <- t(BxPC3_DE_6h_norm)
+BxPC3_DE_6h_norm <- as.matrix(BxPC3_DE_6h_norm)
+BxPC3_DE_6h_norm<- as.data.frame(BxPC3_DE_6h_norm)
+BxPC3_DE_6h_norm$B_C <- rowMeans(BxPC3_DE_6h_norm[7:9])
+BxPC3_DE_6h_norm$B_T_6 <- rowMeans(BxPC3_DE_6h_norm[10:12])
+BxPC3_DE_6h_norm$B_A_6 <- rowMeans(BxPC3_DE_6h_norm[13:15])
+BxPC3_DE_6h_norm$B_T_12 <- rowMeans(BxPC3_DE_6h_norm[1:3])
+BxPC3_DE_6h_norm$B_A_12 <- rowMeans(BxPC3_DE_6h_norm[4:6])
+BxPC3_DE_6h_norm <- BxPC3_DE_6h_norm[, 16:20]
+
+HCT15_DE_6h_norm <- scale(t(HCT15_DE_6h_norm))
+HCT15_DE_6h_norm <- t(HCT15_DE_6h_norm)
+HCT15_DE_6h_norm <- as.matrix(HCT15_DE_6h_norm)
+HCT15_DE_6h_norm<- as.data.frame(HCT15_DE_6h_norm)
+HCT15_DE_6h_norm$H_C <- rowMeans(HCT15_DE_6h_norm[7:9])
+HCT15_DE_6h_norm$H_T_6 <- rowMeans(HCT15_DE_6h_norm[10:12])
+HCT15_DE_6h_norm$H_A_6 <- rowMeans(HCT15_DE_6h_norm[13:15])
+HCT15_DE_6h_norm$H_T_12 <- rowMeans(HCT15_DE_6h_norm[1:3])
+HCT15_DE_6h_norm$H_A_12 <- rowMeans(HCT15_DE_6h_norm[4:6])
+HCT15_DE_6h_norm <- HCT15_DE_6h_norm[, 16:20]
+
+#12h rowmeans
+
+BxPC3_DE_12h_norm <- scale(t(BxPC3_DE_12h_norm))
+BxPC3_DE_12h_norm <- t(BxPC3_DE_12h_norm)
+BxPC3_DE_12h_norm <- as.matrix(BxPC3_DE_12h_norm)
+BxPC3_DE_12h_norm<- as.data.frame(BxPC3_DE_12h_norm)
+BxPC3_DE_12h_norm$B_C <- rowMeans(BxPC3_DE_12h_norm[7:9])
+BxPC3_DE_12h_norm$B_T_6 <- rowMeans(BxPC3_DE_12h_norm[10:12])
+BxPC3_DE_12h_norm$B_A_6 <- rowMeans(BxPC3_DE_12h_norm[13:15])
+BxPC3_DE_12h_norm$B_T_12 <- rowMeans(BxPC3_DE_12h_norm[1:3])
+BxPC3_DE_12h_norm$B_A_12 <- rowMeans(BxPC3_DE_12h_norm[4:6])
+BxPC3_DE_12h_norm <- BxPC3_DE_12h_norm[, 16:20]
+
+HCT15_DE_12h_norm <- scale(t(HCT15_DE_12h_norm))
+HCT15_DE_12h_norm <- t(HCT15_DE_12h_norm)
+HCT15_DE_12h_norm <- as.matrix(HCT15_DE_12h_norm)
+HCT15_DE_12h_norm<- as.data.frame(HCT15_DE_12h_norm)
+HCT15_DE_12h_norm$H_C <- rowMeans(HCT15_DE_12h_norm[7:9])
+HCT15_DE_12h_norm$H_T_6 <- rowMeans(HCT15_DE_12h_norm[10:12])
+HCT15_DE_12h_norm$H_A_6 <- rowMeans(HCT15_DE_12h_norm[13:15])
+HCT15_DE_12h_norm$H_T_12 <- rowMeans(HCT15_DE_12h_norm[1:3])
+HCT15_DE_12h_norm$H_A_12 <- rowMeans(HCT15_DE_12h_norm[4:6])
+HCT15_DE_12h_norm <- HCT15_DE_12h_norm[, 16:20]
+```
+
+### Get HM modules (hyerarchical clustering)
+
+Heatmap modules of peaks with similar accessibility across conditions are clusterized. GSEA is then performed on each module of DAR-associated genes.
+
+```{r, fig.height=8, fig.width=4}
+viridis(100)
+
+HM_clusterized <- function(data, row_split = 5){
+  
+  col_fun <- colorRamp2(seq(-1.9, 1.9, length.out = 100), inferno(100))
+  
+  output <- list()
+  output[["hm"]] <- Heatmap(as.matrix(data),
+                col = col_fun, na_col = "black",border = T,
+                show_row_names = FALSE,
+                cluster_columns = FALSE,
+                use_raster = F, 
+                row_split = row_split)
+
+  clusters <- row_order(output$hm)
+  for(i in 1:length(clusters)){
+    clusters[[i]] <- rownames(data)[clusters[[i]]]
+  }
+  
+  output[["clusters"]] <- clusters
+  output[["cluster_lengths"]] <- as.list(as.character(lengths(output$clusters)))
+  
+  return(output)
+}
+
+HM_clust_B6 <- HM_clusterized(BxPC3_DE_6h_norm, row_split = 5)
+HM_clust_B6$hm
+
+HM_clust_H6 <- HM_clusterized(HCT15_DE_6h_norm, row_split = 5)
+HM_clust_H6$hm
+
+HM_clust_B12 <- HM_clusterized(BxPC3_DE_12h_norm, row_split = 5)
+HM_clust_B12$hm
+
+HM_clust_H12 <- HM_clusterized(HCT15_DE_12h_norm, row_split = 5)
+HM_clust_H12$hm
+```
+
+### Define universe and gene sets for subsequent GSEA analyses
+
+```{r}
+# define universe
+universe <- unique(as.character(norm_anno$symbol))
+# change symbols to ENTREZ IDs (necessary for ClusterProfiler)
+universe_Entrez <- bitr(universe, 
+                        fromType="SYMBOL", 
+                        toType="ENTREZID", 
+                        OrgDb="org.Hs.eg.db")$ENTREZID
+```
+
+### HM modules enrichment
+
+```{r}
+library(clusterProfiler)
+
+HM_clust <- list(HM_clust_B6 = HM_clust_B6, 
+                 HM_clust_H6 = HM_clust_H6, 
+                 HM_clust_B12 = HM_clust_B12, 
+                 HM_clust_H12 = HM_clust_H12)
+
+enrich_HM <- list()
+
+for (i in names(HM_clust)) {
+  
+  j <- HM_clust[[i]]$clusters
+  
+  collector <- list()
+  
+  for (n in 1:length(j)) {
+    
+    gene_list <- j[[n]]
+    
+    entrez_list <- bitr(gene_list, fromType = "SYMBOL", toType="ENTREZID", OrgDb="org.Hs.eg.db")$ENTREZID
+    
+    tmp <- enrichGO(gene = entrez_list,
+          universe = universe_Entrez,
+          OrgDb = "org.Hs.eg.db",
+          ont = "BP",
+          pAdjustMethod = "none",
+          pvalueCutoff  = 1,
+          qvalueCutoff  = 1,
+          readable      = T)
+    
+    collector[[n]] <- as.data.frame(tmp)
+  }
+  
+  enrich_HM[[i]] <- collector
+  
+}
+```
+
+# Pairwise integration
+
+In the coming section, we perform the pairwise integration between transcriptional and chromatin accessibility data. We identify hits having the same sign of regulation in RNA-seq and ATAC-seq which are DE (protein-coding) and/or DAR-associated (protein-coding mapping in
+promoters). Reference peaks in case of multiple mapping to the same gene are chosen based on lower p-value in the specific comparison. Since a delay could exist between a prior chromatin remodeling and a detectable variation in the respective transcript level, pairwise
+comparisons are considered not only at the same time point in both omic layers but also between chromatin changes at 6 h and transcriptional responses at 12 h. Interesting gene names for each of the considered comparisons were also reported and GSEA enrichment is
+applied.
+T: compound M (internal reference TH-CG-20) ; A: compound B (internal reference AF-2)
+
+# RNA 6h vs ATAC 6 h
+## T 6h BxPC-3
+
+```{r}
+#Select up and downregulated genes in the specified comparison
+RNA_T6 <- RNA_DEresults[["B_T_6_RNA_vs_B_C_RNA"]]@results
+RNA_T6 <- subset(RNA_T6, RNA_T6$GENETYPE == "protein_coding")
+DE_RNA_T6_up <- subset(RNA_T6, RNA_T6$regulation == "up")
+DE_RNA_T6_down <- subset(RNA_T6, RNA_T6$regulation == "down")
+DE_RNA_T6_up_ratio <- DE_RNA_T6_up[ ,c(2, 9)]
+DE_RNA_T6_down_ratio <- DE_RNA_T6_down[ ,c(2, 9)]
+
+#Select up and downregulated peaks in the specified comparison
+ATAC_T6 <- DEresults[["BxPC3_THCG20_6h_vs_BxPC3_DMSO_0h"]]@results
+ATAC_T6 <- subset(ATAC_T6, ATAC_T6$type == "protein_coding")
+ATAC_T6 <- subset(ATAC_T6, ATAC_T6$annotation %in% c("Promoter (<=1kb)", "Promoter (1-2kb)", "Promoter (2-3kb)"))
+DE_ATAC_T6_up <- subset(ATAC_T6, ATAC_T6$regulation == "up")
+DE_ATAC_T6_down <- subset(ATAC_T6, ATAC_T6$regulation == "down")
+DE_ATAC_T6_up_ratio <- DE_ATAC_T6_up[ ,c(2, 10)]
+DE_ATAC_T6_down_ratio <- DE_ATAC_T6_down[ ,c(2, 10)]
+
+DE_double_T6_up <- intersect(DE_RNA_T6_up_ratio$SYMBOL, DE_ATAC_T6_up_ratio$symbol)
+DE_double_T6_down <- intersect(DE_RNA_T6_down_ratio$SYMBOL, DE_ATAC_T6_down_ratio$symbol)
+
+#Unify genes/peak-associated genes which are DE/DAR in at least one of the two layers
+DE_T6_up <- unique(c(DE_RNA_T6_up$SYMBOL, DE_ATAC_T6_up$symbol))
+DE_T6_down <- unique(c(DE_RNA_T6_down$SYMBOL, DE_ATAC_T6_down$symbol))
+
+#Subset for transcripts with positive fold change which are DE and/or DAR-associated
+RNA_up_commonDE_T6 <- subset(RNA_T6, RNA_T6$log2FoldChange>=0)
+RNA_up_commonDE_T6 <- subset(RNA_up_commonDE_T6, RNA_up_commonDE_T6$SYMBOL %in% DE_T6_up)
+
+#Subset for transcripts with negative fold change which are DE and/or DAR-associated
+RNA_down_commonDE_T6 <- subset(RNA_T6, RNA_T6$log2FoldChange<0)
+RNA_down_commonDE_T6 <- subset(RNA_down_commonDE_T6, RNA_down_commonDE_T6$SYMBOL %in% DE_T6_down)
+
+#Subset for peaks with positive fold change which are DE and/or DAR-associated
+ATAC_up_commonDE_T6 <- subset(ATAC_T6, ATAC_T6$log2FoldChange>=0)
+ATAC_up_commonDE_T6 <- subset(ATAC_up_commonDE_T6, ATAC_up_commonDE_T6$symbol %in% DE_T6_up)
+
+#Subset for peaks with negative fold change which are DE and/or DAR-associated
+ATAC_down_commonDE_T6 <- subset(ATAC_T6, ATAC_T6$log2FoldChange<0)
+ATAC_down_commonDE_T6 <- subset(ATAC_down_commonDE_T6, ATAC_down_commonDE_T6$symbol %in% DE_T6_down)
+
+#Find genes (DE and/or DAR-associated) with same regulation in RNAseq and ATACseq
+intersect_RNAATAC_T6_up <- intersect(RNA_up_commonDE_T6$SYMBOL, ATAC_up_commonDE_T6$symbol)
+intersect_RNAATAC_T6_down <- intersect(RNA_down_commonDE_T6$SYMBOL, ATAC_down_commonDE_T6$symbol)
+
+#up 
+
+RNAup_T6_selected <- subset(RNA_up_commonDE_T6, RNA_up_commonDE_T6$SYMBOL %in% intersect_RNAATAC_T6_up)
+ATACup_T6_selected <- subset(ATAC_up_commonDE_T6, ATAC_up_commonDE_T6$symbol %in% intersect_RNAATAC_T6_up)
+#multiple hits for atac, choose based on lower pval
+#order by increasing p val, use distinct function by dplyr (distinct(mydata,NAME, .keep_all= TRUE))
+ATACup_T6_selected <- ATACup_T6_selected[order(ATACup_T6_selected$pvalue),]
+ATACup_T6_selected <- distinct(ATACup_T6_selected, symbol, .keep_all = TRUE)
+
+RNAup_T6_selected <- RNAup_T6_selected[,c(2,9)]
+ATACup_T6_selected <- ATACup_T6_selected[,c(2,10)]
+colnames(ATACup_T6_selected)[1] <- "SYMBOL"
+colnames(ATACup_T6_selected)[2] <- "log2FC_ATAC"
+colnames(RNAup_T6_selected)[2] <- "log2FC_RNA"
+dataset_up_T6 <- merge(ATACup_T6_selected, RNAup_T6_selected, by = "SYMBOL")
+
+#down
+
+RNAdown_T6_selected <- subset(RNA_down_commonDE_T6, RNA_down_commonDE_T6$SYMBOL %in% intersect_RNAATAC_T6_down)
+ATACdown_T6_selected <- subset(ATAC_down_commonDE_T6, ATAC_down_commonDE_T6$symbol %in% intersect_RNAATAC_T6_down)
+#multiple hits for atac, choose based on lower pval
+#order by increasing p val, use distinct function by dplyr (distinct(mydata,NAME, .keep_all= TRUE))
+ATACdown_T6_selected <- ATACdown_T6_selected[order(ATACdown_T6_selected$pvalue),]
+ATACdown_T6_selected <- distinct(ATACdown_T6_selected, symbol, .keep_all = TRUE)
+
+RNAdown_T6_selected <- RNAdown_T6_selected[,c(2,9)]
+ATACdown_T6_selected <- ATACdown_T6_selected[,c(2,10)]
+colnames(ATACdown_T6_selected)[1] <- "SYMBOL"
+colnames(ATACdown_T6_selected)[2] <- "log2FC_ATAC"
+colnames(RNAdown_T6_selected)[2] <- "log2FC_RNA"
+dataset_down_T6 <- merge(ATACdown_T6_selected, RNAdown_T6_selected, by = "SYMBOL")
+```
+
+### Plot results (ratio) T6 (Fig. 4 D)
+
+```{r}
+#dataset_up_T6
+#dataset_down_T6
+gene_labels_T6 <- c("BMS1", "CHD7", "AEN", "APEX1", "CDC45", "ERCC6", "LIG3", "HUWE1", "MCM3", "FADD", "RNPS1", "NME1", "AURKA", "BUB1", "AQP3", "FOXA2", "CDC25C", "SOX4", "AMN1", "ATXN3", "GPX1", "SFR1")
+dataset_T6_pairwise <- rbind(dataset_up_T6, dataset_down_T6)
+dataset_T6_pairwise$sign <- ifelse(dataset_T6_pairwise$log2FC_RNA>=0 & dataset_T6_pairwise$log2FC_ATAC>=0, "up", "down")
+dataset_T6_pairwise$gene_label <- ifelse(dataset_T6_pairwise$SYMBOL %in% gene_labels_T6, dataset_T6_pairwise$SYMBOL, "")
+
+ggplot(dataset_T6_pairwise, aes(x=log2FC_RNA, y=log2FC_ATAC, colour=sign, label=gene_label)) +
+  geom_point(alpha=0.15, size=3, stroke=NA) +
+  geom_text(colour="black") +
+  ylim(-2.5, 2.5) +
+  xlim(-2.5, 2.5) +
+  scale_colour_manual(values=c("blue", "red")) +
+  theme_bw()
+```
+
+### Perform GO enrichment
+
+```{r}
+genes_dataset_up_T6 <- c(dataset_up_T6$SYMBOL)
+enr_dataset_up_T6 <- enrichGO(gene = genes_dataset_up_T6,
+          OrgDb = "org.Hs.eg.db",
+          ont = "BP",
+          pAdjustMethod = "none",
+          pvalueCutoff  = 1,
+          qvalueCutoff  = 1,
+          keyType = "SYMBOL")
+  
+genes_dataset_down_T6 <- c(dataset_down_T6$SYMBOL)
+enr_dataset_down_T6 <- enrichGO(gene = genes_dataset_down_T6,
+          OrgDb = "org.Hs.eg.db",
+          ont = "BP",
+          pAdjustMethod = "none",
+          pvalueCutoff  = 1,
+          qvalueCutoff  = 1,
+          keyType = "SYMBOL")
+```
+
+## A 6h BxPC-3
+
+```{r}
+RNA_A6 <- RNA_DEresults[["B_A_6_RNA_vs_B_C_RNA"]]@results
+RNA_A6 <- subset(RNA_A6, RNA_A6$GENETYPE == "protein_coding")
+DE_RNA_A6_up <- subset(RNA_A6, RNA_A6$regulation == "up")
+DE_RNA_A6_down <- subset(RNA_A6, RNA_A6$regulation == "down")
+DE_RNA_A6_up_ratio <- DE_RNA_A6_up[ ,c(2, 9)]
+DE_RNA_A6_down_ratio <- DE_RNA_A6_down[ ,c(2, 9)]
+
+ATAC_A6 <- DEresults[["BxPC3_AF2_6h_vs_BxPC3_DMSO_0h"]]@results
+ATAC_A6 <- subset(ATAC_A6, ATAC_A6$type == "protein_coding")
+ATAC_A6 <- subset(ATAC_A6, ATAC_A6$annotation %in% c("Promoter (<=1kb)", "Promoter (1-2kb)", "Promoter (2-3kb)"))
+DE_ATAC_A6_up <- subset(ATAC_A6, ATAC_A6$regulation == "up")
+DE_ATAC_A6_down <- subset(ATAC_A6, ATAC_A6$regulation == "down")
+DE_ATAC_A6_up_ratio <- DE_ATAC_A6_up[ ,c(2, 10)]
+DE_ATAC_A6_down_ratio <- DE_ATAC_A6_down[ ,c(2, 10)]
+
+DE_double_A6_up <- intersect(DE_RNA_A6_up_ratio$SYMBOL, DE_ATAC_A6_up_ratio$symbol)
+DE_double_A6_down <- intersect(DE_RNA_A6_down_ratio$SYMBOL, DE_ATAC_A6_down_ratio$symbol)
+
+#DE in at least one of the two layers
+
+DE_A6_up <- unique(c(DE_RNA_A6_up$SYMBOL, DE_ATAC_A6_up$symbol))
+DE_A6_down <- unique(c(DE_RNA_A6_down$SYMBOL, DE_ATAC_A6_down$symbol))
+
+RNA_up_commonDE_A6 <- subset(RNA_A6, RNA_A6$log2FoldChange>=0)
+RNA_up_commonDE_A6 <- subset(RNA_up_commonDE_A6, RNA_up_commonDE_A6$SYMBOL %in% DE_A6_up)
+
+RNA_down_commonDE_A6 <- subset(RNA_A6, RNA_A6$log2FoldChange<0)
+RNA_down_commonDE_A6 <- subset(RNA_down_commonDE_A6, RNA_down_commonDE_A6$SYMBOL %in% DE_A6_down)
+
+ATAC_up_commonDE_A6 <- subset(ATAC_A6, ATAC_A6$log2FoldChange>=0)
+ATAC_up_commonDE_A6 <- subset(ATAC_up_commonDE_A6, ATAC_up_commonDE_A6$symbol %in% DE_A6_up)
+
+ATAC_down_commonDE_A6 <- subset(ATAC_A6, ATAC_A6$log2FoldChange<0)
+ATAC_down_commonDE_A6 <- subset(ATAC_down_commonDE_A6, ATAC_down_commonDE_A6$symbol %in% DE_A6_down)
+
+intersect_RNAATAC_A6_up <- intersect(RNA_up_commonDE_A6$SYMBOL, ATAC_up_commonDE_A6$symbol)
+intersect_RNAATAC_A6_down <- intersect(RNA_down_commonDE_A6$SYMBOL, ATAC_down_commonDE_A6$symbol)
+
+#up 
+
+RNAup_A6_selected <- subset(RNA_up_commonDE_A6, RNA_up_commonDE_A6$SYMBOL %in% intersect_RNAATAC_A6_up)
+ATACup_A6_selected <- subset(ATAC_up_commonDE_A6, ATAC_up_commonDE_A6$symbol %in% intersect_RNAATAC_A6_up)
+#multiple hits for atac, choose based on pval
+#order by increasing p val, use distinct function by dplyr (distinct(mydata,NAME, .keep_all= TRUE))
+ATACup_A6_selected <- ATACup_A6_selected[order(ATACup_A6_selected$pvalue),]
+ATACup_A6_selected <- distinct(ATACup_A6_selected, symbol, .keep_all = TRUE)
+
+RNAup_A6_selected <- RNAup_A6_selected[,c(2,9)]
+ATACup_A6_selected <- ATACup_A6_selected[,c(2,10)]
+colnames(ATACup_A6_selected)[1] <- "SYMBOL"
+colnames(ATACup_A6_selected)[2] <- "log2FC_ATAC"
+colnames(RNAup_A6_selected)[2] <- "log2FC_RNA"
+dataset_up_A6 <- merge(ATACup_A6_selected, RNAup_A6_selected, by = "SYMBOL")
+
+#down
+
+RNAdown_A6_selected <- subset(RNA_down_commonDE_A6, RNA_down_commonDE_A6$SYMBOL %in% intersect_RNAATAC_A6_down)
+ATACdown_A6_selected <- subset(ATAC_down_commonDE_A6, ATAC_down_commonDE_A6$symbol %in% intersect_RNAATAC_A6_down)
+#multiple hits for atac, choose based on pval
+#order by increasing p val, use distinct function by dplyr (distinct(mydata,NAME, .keep_all= TRUE))
+ATACdown_A6_selected <- ATACdown_A6_selected[order(ATACdown_A6_selected$pvalue),]
+ATACdown_A6_selected <- distinct(ATACdown_A6_selected, symbol, .keep_all = TRUE)
+
+RNAdown_A6_selected <- RNAdown_A6_selected[,c(2,9)]
+ATACdown_A6_selected <- ATACdown_A6_selected[,c(2,10)]
+colnames(ATACdown_A6_selected)[1] <- "SYMBOL"
+colnames(ATACdown_A6_selected)[2] <- "log2FC_ATAC"
+colnames(RNAdown_A6_selected)[2] <- "log2FC_RNA"
+dataset_down_A6 <- merge(ATACdown_A6_selected, RNAdown_A6_selected, by = "SYMBOL")
+```
+
+### Plot results (ratio) A6 (Fig. 4 supplement 2 A)
+
+```{r}
+gene_labels_A6 <- c("BOP1", "DDX21", "TXNIP", "CASP7", "AEN", "RPL10A", "GADD45A", "CDC25A", "BCL2L2", "AJUBA", "ITGB4", "MAP3K2", "ABI2", "AURKA", "BUB1", "MDM2", "SOX4", "ABL2")
+dataset_A6_pairwise <- rbind(dataset_up_A6, dataset_down_A6)
+dataset_A6_pairwise$sign <- ifelse(dataset_A6_pairwise$log2FC_RNA>=0 & dataset_A6_pairwise$log2FC_ATAC>=0, "up", "down")
+dataset_A6_pairwise$gene_label <- ifelse(dataset_A6_pairwise$SYMBOL %in% gene_labels_A6, dataset_A6_pairwise$SYMBOL, "")
+
+ggplot(dataset_A6_pairwise, aes(x=log2FC_RNA, y=log2FC_ATAC, colour=sign, label=gene_label)) +
+  geom_point(alpha=0.15, size=3, stroke=NA) +
+  geom_text(colour="black") +
+  ylim(-2.5, 2.5) +
+  xlim(-2.5, 2.5) +
+  scale_colour_manual(values=c("blue", "red")) +
+  theme_bw()
+```
+
+### Perform GO enrichment
+
+```{r}
+genes_dataset_up_A6 <- c(dataset_up_A6$SYMBOL)
+enr_dataset_up_A6 <- enrichGO(gene = genes_dataset_up_A6,
+          OrgDb = "org.Hs.eg.db",
+          ont = "BP",
+          pAdjustMethod = "none",
+          pvalueCutoff  = 1,
+          qvalueCutoff  = 1,
+          keyType = "SYMBOL")
+  
+genes_dataset_down_A6 <- c(dataset_down_A6$SYMBOL)
+enr_dataset_down_A6 <- enrichGO(gene = genes_dataset_down_A6,
+          OrgDb = "org.Hs.eg.db",
+          ont = "BP",
+          pAdjustMethod = "none",
+          pvalueCutoff  = 1,
+          qvalueCutoff  = 1,
+          keyType = "SYMBOL")
+```
+
+## T 6h HCT-15
+
+```{r}
+RNA_T6_H <- RNA_DEresults[["H_T_6_RNA_vs_H_C_RNA"]]@results
+RNA_T6_H <- subset(RNA_T6_H, RNA_T6_H$GENETYPE == "protein_coding")
+DE_RNA_T6_H_up <- subset(RNA_T6_H, RNA_T6_H$regulation == "up")
+DE_RNA_T6_H_down <- subset(RNA_T6_H, RNA_T6_H$regulation == "down")
+DE_RNA_T6_H_up_ratio <- DE_RNA_T6_H_up[ ,c(2, 9)]
+DE_RNA_T6_H_down_ratio <- DE_RNA_T6_H_down[ ,c(2, 9)]
+
+ATAC_T6_H <- DEresults[["HCT15_THCG20_6h_vs_HCT15_DMSO_0h"]]@results
+ATAC_T6_H <- subset(ATAC_T6_H, ATAC_T6_H$type == "protein_coding")
+ATAC_T6_H <- subset(ATAC_T6_H, ATAC_T6_H$annotation %in% c("Promoter (<=1kb)", "Promoter (1-2kb)", "Promoter (2-3kb)"))
+DE_ATAC_T6_H_up <- subset(ATAC_T6_H, ATAC_T6_H$regulation == "up")
+DE_ATAC_T6_H_down <- subset(ATAC_T6_H, ATAC_T6_H$regulation == "down")
+DE_ATAC_T6_H_up_ratio <- DE_ATAC_T6_H_up[ ,c(2, 10)]
+DE_ATAC_T6_H_down_ratio <- DE_ATAC_T6_H_down[ ,c(2, 10)]
+
+DE_double_T6_H_up <- intersect(DE_RNA_T6_H_up_ratio$SYMBOL, DE_ATAC_T6_H_up_ratio$symbol)
+DE_double_T6_H_down <- intersect(DE_RNA_T6_H_down_ratio$SYMBOL, DE_ATAC_T6_H_down_ratio$symbol)
+
+#DE in at least one of the two layers
+
+DE_T6_H_up <- unique(c(DE_RNA_T6_H_up$SYMBOL, DE_ATAC_T6_H_up$symbol))
+DE_T6_H_down <- unique(c(DE_RNA_T6_H_down$SYMBOL, DE_ATAC_T6_H_down$symbol))
+
+RNA_up_commonDE_T6_H <- subset(RNA_T6_H, RNA_T6_H$log2FoldChange>=0)
+RNA_up_commonDE_T6_H <- subset(RNA_up_commonDE_T6_H, RNA_up_commonDE_T6_H$SYMBOL %in% DE_T6_H_up)
+
+RNA_down_commonDE_T6_H <- subset(RNA_T6_H, RNA_T6_H$log2FoldChange<0)
+RNA_down_commonDE_T6_H <- subset(RNA_down_commonDE_T6_H, RNA_down_commonDE_T6_H$SYMBOL %in% DE_T6_H_down)
+
+ATAC_up_commonDE_T6_H <- subset(ATAC_T6_H, ATAC_T6_H$log2FoldChange>=0)
+ATAC_up_commonDE_T6_H <- subset(ATAC_up_commonDE_T6_H, ATAC_up_commonDE_T6_H$symbol %in% DE_T6_H_up)
+
+ATAC_down_commonDE_T6_H <- subset(ATAC_T6_H, ATAC_T6_H$log2FoldChange<0)
+ATAC_down_commonDE_T6_H <- subset(ATAC_down_commonDE_T6_H, ATAC_down_commonDE_T6_H$symbol %in% DE_T6_H_down)
+
+intersect_RNAATAC_T6_H_up <- intersect(RNA_up_commonDE_T6_H$SYMBOL, ATAC_up_commonDE_T6_H$symbol)
+intersect_RNAATAC_T6_H_down <- intersect(RNA_down_commonDE_T6_H$SYMBOL, ATAC_down_commonDE_T6_H$symbol)
+
+#up 
+
+RNAup_T6_H_selected <- subset(RNA_up_commonDE_T6_H, RNA_up_commonDE_T6_H$SYMBOL %in% intersect_RNAATAC_T6_H_up)
+ATACup_T6_H_selected <- subset(ATAC_up_commonDE_T6_H, ATAC_up_commonDE_T6_H$symbol %in% intersect_RNAATAC_T6_H_up)
+#multiple hits for atac, choose based on pval
+#order by increasing p val, use distinct function by dplyr (distinct(mydata,NAME, .keep_all= TRUE))
+ATACup_T6_H_selected <- ATACup_T6_H_selected[order(ATACup_T6_H_selected$pvalue),]
+ATACup_T6_H_selected <- distinct(ATACup_T6_H_selected, symbol, .keep_all = TRUE)
+
+RNAup_T6_H_selected <- RNAup_T6_H_selected[,c(2,9)]
+ATACup_T6_H_selected <- ATACup_T6_H_selected[,c(2,10)]
+colnames(ATACup_T6_H_selected)[1] <- "SYMBOL"
+colnames(ATACup_T6_H_selected)[2] <- "log2FC_ATAC"
+colnames(RNAup_T6_H_selected)[2] <- "log2FC_RNA"
+dataset_up_T6_H <- merge(ATACup_T6_H_selected, RNAup_T6_H_selected, by = "SYMBOL")
+
+#down
+
+RNAdown_T6_H_selected <- subset(RNA_down_commonDE_T6_H, RNA_down_commonDE_T6_H$SYMBOL %in% intersect_RNAATAC_T6_H_down)
+ATACdown_T6_H_selected <- subset(ATAC_down_commonDE_T6_H, ATAC_down_commonDE_T6_H$symbol %in% intersect_RNAATAC_T6_H_down)
+#multiple hits for atac, choose based on pval
+#order by increasing p val, use distinct function by dplyr (distinct(mydata,NAME, .keep_all= TRUE))
+ATACdown_T6_H_selected <- ATACdown_T6_H_selected[order(ATACdown_T6_H_selected$pvalue),]
+ATACdown_T6_H_selected <- distinct(ATACdown_T6_H_selected, symbol, .keep_all = TRUE)
+
+RNAdown_T6_H_selected <- RNAdown_T6_H_selected[,c(2,9)]
+ATACdown_T6_H_selected <- ATACdown_T6_H_selected[,c(2,10)]
+colnames(ATACdown_T6_H_selected)[1] <- "SYMBOL"
+colnames(ATACdown_T6_H_selected)[2] <- "log2FC_ATAC"
+colnames(RNAdown_T6_H_selected)[2] <- "log2FC_RNA"
+dataset_down_T6_H <- merge(ATACdown_T6_H_selected, RNAdown_T6_H_selected, by = "SYMBOL")
+```
+
+### Plot results (ratio) T6 (Fig. 4 D)
+
+```{r}
+gene_labels_T6_H <- c("PSMA3", "TEAD4", "BRD4", "CCNE2", "ALOXE3", "FASN", "SCD", "ATAD5", "DTL", "ACVR1B", "DKK1", "DLX1", "BPGM", "CPT1A", "GALM")
+dataset_T6_H_pairwise <- rbind(dataset_up_T6_H, dataset_down_T6_H)
+dataset_T6_H_pairwise$sign <- ifelse(dataset_T6_H_pairwise$log2FC_RNA>=0 & dataset_T6_H_pairwise$log2FC_ATAC>=0, "up", "down")
+dataset_T6_H_pairwise$gene_label <- ifelse(dataset_T6_H_pairwise$SYMBOL %in% gene_labels_T6_H, dataset_T6_H_pairwise$SYMBOL, "")
+
+ggplot(dataset_T6_H_pairwise, aes(x=log2FC_RNA, y=log2FC_ATAC, colour=sign, label=gene_label)) +
+  geom_point(alpha=0.15, size=3, stroke=NA) +
+  geom_text(colour="black") +
+  ylim(-2.5, 2.5) +
+  xlim(-2.5, 2.5) +
+  scale_colour_manual(values=c("blue", "red")) +
+  theme_bw()
+```
+
+### Perform GO enrichment
+
+```{r}
+genes_dataset_up_T6_H <- c(dataset_up_T6_H$SYMBOL)
+enr_dataset_up_T6_H <- enrichGO(gene = genes_dataset_up_T6_H,
+          OrgDb = "org.Hs.eg.db",
+          ont = "BP",
+          pAdjustMethod = "none",
+          pvalueCutoff  = 1,
+          qvalueCutoff  = 1,
+          keyType = "SYMBOL")
+  
+genes_dataset_down_T6_H <- c(dataset_down_T6_H$SYMBOL)
+enr_dataset_down_T6_H <- enrichGO(gene = genes_dataset_down_T6_H,
+          OrgDb = "org.Hs.eg.db",
+          ont = "BP",
+          pAdjustMethod = "none",
+          pvalueCutoff  = 1,
+          qvalueCutoff  = 1,
+          keyType = "SYMBOL")
+```
+
+## A 6h HCT-15
+
+```{r}
+RNA_A6_H <- RNA_DEresults[["H_A_6_RNA_vs_H_C_RNA"]]@results
+RNA_A6_H <- subset(RNA_A6_H, RNA_A6_H$GENETYPE == "protein_coding")
+DE_RNA_A6_H_up <- subset(RNA_A6_H, RNA_A6_H$regulation == "up")
+DE_RNA_A6_H_down <- subset(RNA_A6_H, RNA_A6_H$regulation == "down")
+DE_RNA_A6_H_up_ratio <- DE_RNA_A6_H_up[ ,c(2, 9)]
+DE_RNA_A6_H_down_ratio <- DE_RNA_A6_H_down[ ,c(2, 9)]
+
+ATAC_A6_H <- DEresults[["HCT15_AF2_6h_vs_HCT15_DMSO_0h"]]@results
+ATAC_A6_H <- subset(ATAC_A6_H, ATAC_A6_H$type == "protein_coding")
+ATAC_A6_H <- subset(ATAC_A6_H, ATAC_A6_H$annotation %in% c("Promoter (<=1kb)", "Promoter (1-2kb)", "Promoter (2-3kb)"))
+DE_ATAC_A6_H_up <- subset(ATAC_A6_H, ATAC_A6_H$regulation == "up")
+DE_ATAC_A6_H_down <- subset(ATAC_A6_H, ATAC_A6_H$regulation == "down")
+DE_ATAC_A6_H_up_ratio <- DE_ATAC_A6_H_up[ ,c(2, 10)]
+DE_ATAC_A6_H_down_ratio <- DE_ATAC_A6_H_down[ ,c(2, 10)]
+
+DE_double_A6_H_up <- intersect(DE_RNA_A6_H_up_ratio$SYMBOL, DE_ATAC_A6_H_up_ratio$symbol)
+DE_double_A6_H_down <- intersect(DE_RNA_A6_H_down_ratio$SYMBOL, DE_ATAC_A6_H_down_ratio$symbol)
+
+#DE in at least one of the two layers
+
+DE_A6_H_up <- unique(c(DE_RNA_A6_H_up$SYMBOL, DE_ATAC_A6_H_up$symbol))
+DE_A6_H_down <- unique(c(DE_RNA_A6_H_down$SYMBOL, DE_ATAC_A6_H_down$symbol))
+
+RNA_up_commonDE_A6_H <- subset(RNA_A6_H, RNA_A6_H$log2FoldChange>=0)
+RNA_up_commonDE_A6_H <- subset(RNA_up_commonDE_A6_H, RNA_up_commonDE_A6_H$SYMBOL %in% DE_A6_H_up)
+
+RNA_down_commonDE_A6_H <- subset(RNA_A6_H, RNA_A6_H$log2FoldChange<0)
+RNA_down_commonDE_A6_H <- subset(RNA_down_commonDE_A6_H, RNA_down_commonDE_A6_H$SYMBOL %in% DE_A6_H_down)
+
+ATAC_up_commonDE_A6_H <- subset(ATAC_A6_H, ATAC_A6_H$log2FoldChange>=0)
+ATAC_up_commonDE_A6_H <- subset(ATAC_up_commonDE_A6_H, ATAC_up_commonDE_A6_H$symbol %in% DE_A6_H_up)
+
+ATAC_down_commonDE_A6_H <- subset(ATAC_A6_H, ATAC_A6_H$log2FoldChange<0)
+ATAC_down_commonDE_A6_H <- subset(ATAC_down_commonDE_A6_H, ATAC_down_commonDE_A6_H$symbol %in% DE_A6_H_down)
+
+intersect_RNAATAC_A6_H_up <- intersect(RNA_up_commonDE_A6_H$SYMBOL, ATAC_up_commonDE_A6_H$symbol)
+intersect_RNAATAC_A6_H_down <- intersect(RNA_down_commonDE_A6_H$SYMBOL, ATAC_down_commonDE_A6_H$symbol)
+
+#up 
+
+RNAup_A6_H_selected <- subset(RNA_up_commonDE_A6_H, RNA_up_commonDE_A6_H$SYMBOL %in% intersect_RNAATAC_A6_H_up)
+ATACup_A6_H_selected <- subset(ATAC_up_commonDE_A6_H, ATAC_up_commonDE_A6_H$symbol %in% intersect_RNAATAC_A6_H_up)
+#multiple hits for atac, choose based on pval
+#order by increasing p val, use distinct function by dplyr (distinct(mydata,NAME, .keep_all= TRUE))
+ATACup_A6_H_selected <- ATACup_A6_H_selected[order(ATACup_A6_H_selected$pvalue),]
+ATACup_A6_H_selected <- distinct(ATACup_A6_H_selected, symbol, .keep_all = TRUE)
+
+RNAup_A6_H_selected <- RNAup_A6_H_selected[,c(2,9)]
+ATACup_A6_H_selected <- ATACup_A6_H_selected[,c(2,10)]
+colnames(ATACup_A6_H_selected)[1] <- "SYMBOL"
+colnames(ATACup_A6_H_selected)[2] <- "log2FC_ATAC"
+colnames(RNAup_A6_H_selected)[2] <- "log2FC_RNA"
+dataset_up_A6_H <- merge(ATACup_A6_H_selected, RNAup_A6_H_selected, by = "SYMBOL")
+
+#down
+
+RNAdown_A6_H_selected <- subset(RNA_down_commonDE_A6_H, RNA_down_commonDE_A6_H$SYMBOL %in% intersect_RNAATAC_A6_H_down)
+ATACdown_A6_H_selected <- subset(ATAC_down_commonDE_A6_H, ATAC_down_commonDE_A6_H$symbol %in% intersect_RNAATAC_A6_H_down)
+#multiple hits for atac, choose based on pval
+#order by increasing p val, use distinct function by dplyr (distinct(mydata,NAME, .keep_all= TRUE))
+ATACdown_A6_H_selected <- ATACdown_A6_H_selected[order(ATACdown_A6_H_selected$pvalue),]
+ATACdown_A6_H_selected <- distinct(ATACdown_A6_H_selected, symbol, .keep_all = TRUE)
+
+RNAdown_A6_H_selected <- RNAdown_A6_H_selected[,c(2,9)]
+ATACdown_A6_H_selected <- ATACdown_A6_H_selected[,c(2,10)]
+colnames(ATACdown_A6_H_selected)[1] <- "SYMBOL"
+colnames(ATACdown_A6_H_selected)[2] <- "log2FC_ATAC"
+colnames(RNAdown_A6_H_selected)[2] <- "log2FC_RNA"
+dataset_down_A6_H <- merge(ATACdown_A6_H_selected, RNAdown_A6_H_selected, by = "SYMBOL")
+```
+
+### Plot results (ratio) A6 (Fig. 4 supplement 2 A)
+
+```{r}
+gene_labels_A6_H <- c("TGFBR1", "BMPR1A", "ACAT", "FASN", "SCD", "BRD4", "CDC45", "ATP1B1", "CASP3", "KRAS", "DNAJA1", "AAAs", "AURKA", "DDX11", "DNMT3B", "CPT1A", "G6PD")
+dataset_A6_H_pairwise <- rbind(dataset_up_A6_H, dataset_down_A6_H)
+dataset_A6_H_pairwise$sign <- ifelse(dataset_A6_H_pairwise$log2FC_RNA>=0 & dataset_A6_H_pairwise$log2FC_ATAC>=0, "up", "down")
+dataset_A6_H_pairwise$gene_label <- ifelse(dataset_A6_H_pairwise$SYMBOL %in% gene_labels_A6_H, dataset_A6_H_pairwise$SYMBOL, "")
+
+ggplot(dataset_A6_H_pairwise, aes(x=log2FC_RNA, y=log2FC_ATAC, colour=sign, label=gene_label)) +
+  geom_point(alpha=0.15, size=3, stroke=NA) +
+  geom_text(colour="black") +
+  ylim(-2.5, 2.5) +
+  xlim(-2.5, 2.5) +
+  scale_colour_manual(values=c("blue", "red")) +
+  theme_bw()
+```
+
+### Perform GO enrichment
+
+```{r}
+genes_dataset_up_A6_H <- c(dataset_up_A6_H$SYMBOL)
+enr_dataset_up_A6_H <- enrichGO(gene = genes_dataset_up_A6_H,
+          OrgDb = "org.Hs.eg.db",
+          ont = "BP",
+          pAdjustMethod = "none",
+          pvalueCutoff  = 1,
+          qvalueCutoff  = 1,
+          keyType = "SYMBOL")
+  
+genes_dataset_down_A6_H <- c(dataset_down_A6_H$SYMBOL)
+enr_dataset_down_A6_H <- enrichGO(gene = genes_dataset_down_A6_H,
+          OrgDb = "org.Hs.eg.db",
+          ont = "BP",
+          pAdjustMethod = "none",
+          pvalueCutoff  = 1,
+          qvalueCutoff  = 1,
+          keyType = "SYMBOL")
+```
+
+# RNA 12 h vs ATAC 12 h (Fig. 4 supplement 2 B)
+## T 12h BxPC-3
+
+```{r}
+RNA_T12 <- RNA_DEresults[["B_T_12_RNA_vs_B_C_RNA"]]@results
+RNA_T12 <- subset(RNA_T12, RNA_T12$GENETYPE == "protein_coding")
+DE_RNA_T12_up <- subset(RNA_T12, RNA_T12$regulation == "up")
+DE_RNA_T12_down <- subset(RNA_T12, RNA_T12$regulation == "down")
+DE_RNA_T12_up_ratio <- DE_RNA_T12_up[ ,c(2, 9)]
+DE_RNA_T12_down_ratio <- DE_RNA_T12_down[ ,c(2, 9)]
+
+ATAC_T12 <- DEresults[["BxPC3_THCG20_12h_vs_BxPC3_DMSO_0h"]]@results
+ATAC_T12 <- subset(ATAC_T12, ATAC_T12$type == "protein_coding")
+ATAC_T12 <- subset(ATAC_T12, ATAC_T12$annotation %in% c("Promoter (<=1kb)", "Promoter (1-2kb)", "Promoter (2-3kb)"))
+DE_ATAC_T12_up <- subset(ATAC_T12, ATAC_T12$regulation == "up")
+DE_ATAC_T12_down <- subset(ATAC_T12, ATAC_T12$regulation == "down")
+DE_ATAC_T12_up_ratio <- DE_ATAC_T12_up[ ,c(2, 10)]
+DE_ATAC_T12_down_ratio <- DE_ATAC_T12_down[ ,c(2, 10)]
+
+DE_double_T12_up <- intersect(DE_RNA_T12_up_ratio$SYMBOL, DE_ATAC_T12_up_ratio$symbol)
+DE_double_T12_down <- intersect(DE_RNA_T12_down_ratio$SYMBOL, DE_ATAC_T12_down_ratio$symbol)
+
+#DE in at least one of the two layers
+
+DE_T12_up <- unique(c(DE_RNA_T12_up$SYMBOL, DE_ATAC_T12_up$symbol))
+DE_T12_down <- unique(c(DE_RNA_T12_down$SYMBOL, DE_ATAC_T12_down$symbol))
+
+RNA_up_commonDE_T12 <- subset(RNA_T12, RNA_T12$log2FoldChange>=0)
+RNA_up_commonDE_T12 <- subset(RNA_up_commonDE_T12, RNA_up_commonDE_T12$SYMBOL %in% DE_T12_up)
+
+RNA_down_commonDE_T12 <- subset(RNA_T12, RNA_T12$log2FoldChange<0)
+RNA_down_commonDE_T12 <- subset(RNA_down_commonDE_T12, RNA_down_commonDE_T12$SYMBOL %in% DE_T12_down)
+
+ATAC_up_commonDE_T12 <- subset(ATAC_T12, ATAC_T12$log2FoldChange>=0)
+ATAC_up_commonDE_T12 <- subset(ATAC_up_commonDE_T12, ATAC_up_commonDE_T12$symbol %in% DE_T12_up)
+
+ATAC_down_commonDE_T12 <- subset(ATAC_T12, ATAC_T12$log2FoldChange<0)
+ATAC_down_commonDE_T12 <- subset(ATAC_down_commonDE_T12, ATAC_down_commonDE_T12$symbol %in% DE_T12_down)
+
+intersect_RNAATAC_T12_up <- intersect(RNA_up_commonDE_T12$SYMBOL, ATAC_up_commonDE_T12$symbol)
+intersect_RNAATAC_T12_down <- intersect(RNA_down_commonDE_T12$SYMBOL, ATAC_down_commonDE_T12$symbol)
+
+#up 
+
+RNAup_T12_selected <- subset(RNA_up_commonDE_T12, RNA_up_commonDE_T12$SYMBOL %in% intersect_RNAATAC_T12_up)
+ATACup_T12_selected <- subset(ATAC_up_commonDE_T12, ATAC_up_commonDE_T12$symbol %in% intersect_RNAATAC_T12_up)
+ATACup_T12_selected <- ATACup_T12_selected[order(ATACup_T12_selected$pvalue),]
+ATACup_T12_selected <- distinct(ATACup_T12_selected, symbol, .keep_all = TRUE)
+
+RNAup_T12_selected <- RNAup_T12_selected[,c(2,9)]
+ATACup_T12_selected <- ATACup_T12_selected[,c(2,10)]
+colnames(ATACup_T12_selected)[1] <- "SYMBOL"
+colnames(ATACup_T12_selected)[2] <- "log2FC_ATAC"
+colnames(RNAup_T12_selected)[2] <- "log2FC_RNA"
+dataset_up_T12 <- merge(ATACup_T12_selected, RNAup_T12_selected, by = "SYMBOL")
+
+#down
+
+RNAdown_T12_selected <- subset(RNA_down_commonDE_T12, RNA_down_commonDE_T12$SYMBOL %in% intersect_RNAATAC_T12_down)
+ATACdown_T12_selected <- subset(ATAC_down_commonDE_T12, ATAC_down_commonDE_T12$symbol %in% intersect_RNAATAC_T12_down)
+ATACdown_T12_selected <- ATACdown_T12_selected[order(ATACdown_T12_selected$pvalue),]
+ATACdown_T12_selected <- distinct(ATACdown_T12_selected, symbol, .keep_all = TRUE)
+
+RNAdown_T12_selected <- RNAdown_T12_selected[,c(2,9)]
+ATACdown_T12_selected <- ATACdown_T12_selected[,c(2,10)]
+colnames(ATACdown_T12_selected)[1] <- "SYMBOL"
+colnames(ATACdown_T12_selected)[2] <- "log2FC_ATAC"
+colnames(RNAdown_T12_selected)[2] <- "log2FC_RNA"
+dataset_down_T12 <- merge(ATACdown_T12_selected, RNAdown_T12_selected, by = "SYMBOL")
+```
+
+### Plot results (ratio) T12 
+
+```{r}
+dataset_T12_pairwise <- rbind(dataset_up_T12, dataset_down_T12)
+dataset_T12_pairwise$sign <- ifelse(dataset_T12_pairwise$log2FC_RNA>=0 & dataset_T12_pairwise$log2FC_ATAC>=0, "up", "down")
+
+ggplot(dataset_T12_pairwise, aes(x=log2FC_RNA, y=log2FC_ATAC, colour=sign)) +
+  geom_point(alpha=0.2, size=3, stroke=NA) +
+  ylim(-2.5, 2.5) +
+  xlim(-2.5, 2.5) +
+  scale_colour_manual(values=c("blue", "red"))+
+  theme_bw()
+```
+
+### Perform GO enrichment
+
+```{r}
+genes_dataset_up_T12 <- c(dataset_up_T12$SYMBOL)
+enr_dataset_up_T12 <- enrichGO(gene = genes_dataset_up_T12,
+          OrgDb = "org.Hs.eg.db",
+          ont = "BP",
+          pAdjustMethod = "none",
+          pvalueCutoff  = 1,
+          qvalueCutoff  = 1,
+          keyType = "SYMBOL")
+  
+genes_dataset_down_T12 <- c(dataset_down_T12$SYMBOL)
+enr_dataset_down_T12 <- enrichGO(gene = genes_dataset_down_T12,
+          OrgDb = "org.Hs.eg.db",
+          ont = "BP",
+          pAdjustMethod = "none",
+          pvalueCutoff  = 1,
+          qvalueCutoff  = 1,
+          keyType = "SYMBOL")
+```
+
+## A 12h BxPC-3
+
+```{r}
+RNA_A12 <- RNA_DEresults[["B_A_12_RNA_vs_B_C_RNA"]]@results
+RNA_A12 <- subset(RNA_A12, RNA_A12$GENETYPE == "protein_coding")
+DE_RNA_A12_up <- subset(RNA_A12, RNA_A12$regulation == "up")
+DE_RNA_A12_down <- subset(RNA_A12, RNA_A12$regulation == "down")
+DE_RNA_A12_up_ratio <- DE_RNA_A12_up[ ,c(2, 9)]
+DE_RNA_A12_down_ratio <- DE_RNA_A12_down[ ,c(2, 9)]
+
+ATAC_A12 <- DEresults[["BxPC3_AF2_12h_vs_BxPC3_DMSO_0h"]]@results
+ATAC_A12 <- subset(ATAC_A12, ATAC_A12$type == "protein_coding")
+ATAC_A12 <- subset(ATAC_A12, ATAC_A12$annotation %in% c("Promoter (<=1kb)", "Promoter (1-2kb)", "Promoter (2-3kb)"))
+DE_ATAC_A12_up <- subset(ATAC_A12, ATAC_A12$regulation == "up")
+DE_ATAC_A12_down <- subset(ATAC_A12, ATAC_A12$regulation == "down")
+DE_ATAC_A12_up_ratio <- DE_ATAC_A12_up[ ,c(2, 10)]
+DE_ATAC_A12_down_ratio <- DE_ATAC_A12_down[ ,c(2, 10)]
+
+DE_double_A12_up <- intersect(DE_RNA_A12_up_ratio$SYMBOL, DE_ATAC_A12_up_ratio$symbol)
+DE_double_A12_down <- intersect(DE_RNA_A12_down_ratio$SYMBOL, DE_ATAC_A12_down_ratio$symbol)
+
+#DE in at least one of the two layers
+
+DE_A12_up <- unique(c(DE_RNA_A12_up$SYMBOL, DE_ATAC_A12_up$symbol))
+DE_A12_down <- unique(c(DE_RNA_A12_down$SYMBOL, DE_ATAC_A12_down$symbol))
+
+RNA_up_commonDE_A12 <- subset(RNA_A12, RNA_A12$log2FoldChange>=0)
+RNA_up_commonDE_A12 <- subset(RNA_up_commonDE_A12, RNA_up_commonDE_A12$SYMBOL %in% DE_A12_up)
+
+RNA_down_commonDE_A12 <- subset(RNA_A12, RNA_A12$log2FoldChange<0)
+RNA_down_commonDE_A12 <- subset(RNA_down_commonDE_A12, RNA_down_commonDE_A12$SYMBOL %in% DE_A12_down)
+
+ATAC_up_commonDE_A12 <- subset(ATAC_A12, ATAC_A12$log2FoldChange>=0)
+ATAC_up_commonDE_A12 <- subset(ATAC_up_commonDE_A12, ATAC_up_commonDE_A12$symbol %in% DE_A12_up)
+
+ATAC_down_commonDE_A12 <- subset(ATAC_A12, ATAC_A12$log2FoldChange<0)
+ATAC_down_commonDE_A12 <- subset(ATAC_down_commonDE_A12, ATAC_down_commonDE_A12$symbol %in% DE_A12_down)
+
+intersect_RNAATAC_A12_up <- intersect(RNA_up_commonDE_A12$SYMBOL, ATAC_up_commonDE_A12$symbol)
+intersect_RNAATAC_A12_down <- intersect(RNA_down_commonDE_A12$SYMBOL, ATAC_down_commonDE_A12$symbol)
+
+#up 
+
+RNAup_A12_selected <- subset(RNA_up_commonDE_A12, RNA_up_commonDE_A12$SYMBOL %in% intersect_RNAATAC_A12_up)
+ATACup_A12_selected <- subset(ATAC_up_commonDE_A12, ATAC_up_commonDE_A12$symbol %in% intersect_RNAATAC_A12_up)
+ATACup_A12_selected <- ATACup_A12_selected[order(ATACup_A12_selected$pvalue),]
+ATACup_A12_selected <- distinct(ATACup_A12_selected, symbol, .keep_all = TRUE)
+
+RNAup_A12_selected <- RNAup_A12_selected[,c(2,9)]
+ATACup_A12_selected <- ATACup_A12_selected[,c(2,10)]
+colnames(ATACup_A12_selected)[1] <- "SYMBOL"
+colnames(ATACup_A12_selected)[2] <- "log2FC_ATAC"
+colnames(RNAup_A12_selected)[2] <- "log2FC_RNA"
+dataset_up_A12 <- merge(ATACup_A12_selected, RNAup_A12_selected, by = "SYMBOL")
+
+#down
+
+RNAdown_A12_selected <- subset(RNA_down_commonDE_A12, RNA_down_commonDE_A12$SYMBOL %in% intersect_RNAATAC_A12_down)
+ATACdown_A12_selected <- subset(ATAC_down_commonDE_A12, ATAC_down_commonDE_A12$symbol %in% intersect_RNAATAC_A12_down)
+ATACdown_A12_selected <- ATACdown_A12_selected[order(ATACdown_A12_selected$pvalue),]
+ATACdown_A12_selected <- distinct(ATACdown_A12_selected, symbol, .keep_all = TRUE)
+
+RNAdown_A12_selected <- RNAdown_A12_selected[,c(2,9)]
+ATACdown_A12_selected <- ATACdown_A12_selected[,c(2,10)]
+colnames(ATACdown_A12_selected)[1] <- "SYMBOL"
+colnames(ATACdown_A12_selected)[2] <- "log2FC_ATAC"
+colnames(RNAdown_A12_selected)[2] <- "log2FC_RNA"
+dataset_down_A12 <- merge(ATACdown_A12_selected, RNAdown_A12_selected, by = "SYMBOL")
+```
+
+### Plot results (ratio) A12
+
+```{r}
+dataset_A12_pairwise <- rbind(dataset_up_A12, dataset_down_A12)
+dataset_A12_pairwise$sign <- ifelse(dataset_A12_pairwise$log2FC_RNA>=0 & dataset_A12_pairwise$log2FC_ATAC>=0, "up", "down")
+
+ggplot(dataset_A12_pairwise, aes(x=log2FC_RNA, y=log2FC_ATAC, colour=sign)) +
+  geom_point(alpha=0.2, size=3, stroke=NA) +
+  ylim(-2.5, 2.5) +
+  xlim(-2.5, 2.5) +
+  scale_colour_manual(values=c("blue", "red"))+
+  theme_bw()
+```
+
+### Perform GO enrichment
+
+```{r}
+genes_dataset_up_A12 <- c(dataset_up_A12$SYMBOL)
+enr_dataset_up_A12 <- enrichGO(gene = genes_dataset_up_A12,
+          OrgDb = "org.Hs.eg.db",
+          ont = "BP",
+          pAdjustMethod = "none",
+          pvalueCutoff  = 1,
+          qvalueCutoff  = 1,
+          keyType = "SYMBOL")
+  
+genes_dataset_down_A12 <- c(dataset_down_A12$SYMBOL)
+enr_dataset_down_A12 <- enrichGO(gene = genes_dataset_down_A12,
+          OrgDb = "org.Hs.eg.db",
+          ont = "BP",
+          pAdjustMethod = "none",
+          pvalueCutoff  = 1,
+          qvalueCutoff  = 1,
+          keyType = "SYMBOL")
+```
+
+## T 12h HCT-15
+
+```{r}
+RNA_T12_H <- RNA_DEresults[["H_T_12_RNA_vs_H_C_RNA"]]@results
+RNA_T12_H <- subset(RNA_T12_H, RNA_T12_H$GENETYPE == "protein_coding")
+DE_RNA_T12_H_up <- subset(RNA_T12_H, RNA_T12_H$regulation == "up")
+DE_RNA_T12_H_down <- subset(RNA_T12_H, RNA_T12_H$regulation == "down")
+DE_RNA_T12_H_up_ratio <- DE_RNA_T12_H_up[ ,c(2, 9)]
+DE_RNA_T12_H_down_ratio <- DE_RNA_T12_H_down[ ,c(2, 9)]
+
+ATAC_T12_H <- DEresults[["HCT15_THCG20_12h_vs_HCT15_DMSO_0h"]]@results
+ATAC_T12_H <- subset(ATAC_T12_H, ATAC_T12_H$type == "protein_coding")
+ATAC_T12_H <- subset(ATAC_T12_H, ATAC_T12_H$annotation %in% c("Promoter (<=1kb)", "Promoter (1-2kb)", "Promoter (2-3kb)"))
+DE_ATAC_T12_H_up <- subset(ATAC_T12_H, ATAC_T12_H$regulation == "up")
+DE_ATAC_T12_H_down <- subset(ATAC_T12_H, ATAC_T12_H$regulation == "down")
+DE_ATAC_T12_H_up_ratio <- DE_ATAC_T12_H_up[ ,c(2, 10)]
+DE_ATAC_T12_H_down_ratio <- DE_ATAC_T12_H_down[ ,c(2, 10)]
+
+DE_double_T12_H_up <- intersect(DE_RNA_T12_H_up_ratio$SYMBOL, DE_ATAC_T12_H_up_ratio$symbol)
+DE_double_T12_H_down <- intersect(DE_RNA_T12_H_down_ratio$SYMBOL, DE_ATAC_T12_H_down_ratio$symbol)
+
+#DE in at least one of the two layers
+
+DE_T12_H_up <- unique(c(DE_RNA_T12_H_up$SYMBOL, DE_ATAC_T12_H_up$symbol))
+DE_T12_H_down <- unique(c(DE_RNA_T12_H_down$SYMBOL, DE_ATAC_T12_H_down$symbol))
+
+RNA_up_commonDE_T12_H <- subset(RNA_T12_H, RNA_T12_H$log2FoldChange>=0)
+RNA_up_commonDE_T12_H <- subset(RNA_up_commonDE_T12_H, RNA_up_commonDE_T12_H$SYMBOL %in% DE_T12_H_up)
+
+RNA_down_commonDE_T12_H <- subset(RNA_T12_H, RNA_T12_H$log2FoldChange<0)
+RNA_down_commonDE_T12_H <- subset(RNA_down_commonDE_T12_H, RNA_down_commonDE_T12_H$SYMBOL %in% DE_T12_H_down)
+
+ATAC_up_commonDE_T12_H <- subset(ATAC_T12_H, ATAC_T12_H$log2FoldChange>=0)
+ATAC_up_commonDE_T12_H <- subset(ATAC_up_commonDE_T12_H, ATAC_up_commonDE_T12_H$symbol %in% DE_T12_H_up)
+
+ATAC_down_commonDE_T12_H <- subset(ATAC_T12_H, ATAC_T12_H$log2FoldChange<0)
+ATAC_down_commonDE_T12_H <- subset(ATAC_down_commonDE_T12_H, ATAC_down_commonDE_T12_H$symbol %in% DE_T12_H_down)
+
+intersect_RNAATAC_T12_H_up <- intersect(RNA_up_commonDE_T12_H$SYMBOL, ATAC_up_commonDE_T12_H$symbol)
+intersect_RNAATAC_T12_H_down <- intersect(RNA_down_commonDE_T12_H$SYMBOL, ATAC_down_commonDE_T12_H$symbol)
+
+#up 
+
+RNAup_T12_H_selected <- subset(RNA_up_commonDE_T12_H, RNA_up_commonDE_T12_H$SYMBOL %in% intersect_RNAATAC_T12_H_up)
+ATACup_T12_H_selected <- subset(ATAC_up_commonDE_T12_H, ATAC_up_commonDE_T12_H$symbol %in% intersect_RNAATAC_T12_H_up)
+ATACup_T12_H_selected <- ATACup_T12_H_selected[order(ATACup_T12_H_selected$pvalue),]
+ATACup_T12_H_selected <- distinct(ATACup_T12_H_selected, symbol, .keep_all = TRUE)
+
+RNAup_T12_H_selected <- RNAup_T12_H_selected[,c(2,9)]
+ATACup_T12_H_selected <- ATACup_T12_H_selected[,c(2,10)]
+colnames(ATACup_T12_H_selected)[1] <- "SYMBOL"
+colnames(ATACup_T12_H_selected)[2] <- "log2FC_ATAC"
+colnames(RNAup_T12_H_selected)[2] <- "log2FC_RNA"
+dataset_up_T12_H <- merge(ATACup_T12_H_selected, RNAup_T12_H_selected, by = "SYMBOL")
+
+#down
+
+RNAdown_T12_H_selected <- subset(RNA_down_commonDE_T12_H, RNA_down_commonDE_T12_H$SYMBOL %in% intersect_RNAATAC_T12_H_down)
+ATACdown_T12_H_selected <- subset(ATAC_down_commonDE_T12_H, ATAC_down_commonDE_T12_H$symbol %in% intersect_RNAATAC_T12_H_down)
+ATACdown_T12_H_selected <- ATACdown_T12_H_selected[order(ATACdown_T12_H_selected$pvalue),]
+ATACdown_T12_H_selected <- distinct(ATACdown_T12_H_selected, symbol, .keep_all = TRUE)
+
+RNAdown_T12_H_selected <- RNAdown_T12_H_selected[,c(2,9)]
+ATACdown_T12_H_selected <- ATACdown_T12_H_selected[,c(2,10)]
+colnames(ATACdown_T12_H_selected)[1] <- "SYMBOL"
+colnames(ATACdown_T12_H_selected)[2] <- "log2FC_ATAC"
+colnames(RNAdown_T12_H_selected)[2] <- "log2FC_RNA"
+dataset_down_T12_H <- merge(ATACdown_T12_H_selected, RNAdown_T12_H_selected, by = "SYMBOL")
+```
+
+### Plot results (ratio) T12 
+
+```{r}
+dataset_T12_H_pairwise <- rbind(dataset_up_T12_H, dataset_down_T12_H)
+dataset_T12_H_pairwise$sign <- ifelse(dataset_T12_H_pairwise$log2FC_RNA>=0 & dataset_T12_H_pairwise$log2FC_ATAC>=0, "up", "down")
+
+ggplot(dataset_T12_H_pairwise, aes(x=log2FC_RNA, y=log2FC_ATAC, colour=sign)) +
+  geom_point(alpha=0.2, size=3, stroke=NA) +
+  ylim(-2.5, 2.5) +
+  xlim(-2.5, 2.5) +
+  scale_colour_manual(values=c("blue", "red"))+
+  theme_bw()
+```
+
+### Perform GO enrichment
+
+```{r}
+genes_dataset_up_T12_H <- c(dataset_up_T12_H$SYMBOL)
+enr_dataset_up_T12_H <- enrichGO(gene = genes_dataset_up_T12_H,
+          OrgDb = "org.Hs.eg.db",
+          ont = "BP",
+          pAdjustMethod = "none",
+          pvalueCutoff  = 1,
+          qvalueCutoff  = 1,
+          keyType = "SYMBOL")
+  
+genes_dataset_down_T12_H <- c(dataset_down_T12_H$SYMBOL)
+enr_dataset_down_T12_H <- enrichGO(gene = genes_dataset_down_T12_H,
+          OrgDb = "org.Hs.eg.db",
+          ont = "BP",
+          pAdjustMethod = "none",
+          pvalueCutoff  = 1,
+          qvalueCutoff  = 1,
+          keyType = "SYMBOL")
+```
+
+## A 12h HCT-15
+
+```{r}
+RNA_A12_H <- RNA_DEresults[["H_A_12_RNA_vs_H_C_RNA"]]@results
+RNA_A12_H <- subset(RNA_A12_H, RNA_A12_H$GENETYPE == "protein_coding")
+DE_RNA_A12_H_up <- subset(RNA_A12_H, RNA_A12_H$regulation == "up")
+DE_RNA_A12_H_down <- subset(RNA_A12_H, RNA_A12_H$regulation == "down")
+DE_RNA_A12_H_up_ratio <- DE_RNA_A12_H_up[ ,c(2, 9)]
+DE_RNA_A12_H_down_ratio <- DE_RNA_A12_H_down[ ,c(2, 9)]
+
+ATAC_A12_H <- DEresults[["HCT15_AF2_12h_vs_HCT15_DMSO_0h"]]@results
+ATAC_A12_H <- subset(ATAC_A12_H, ATAC_A12_H$type == "protein_coding")
+ATAC_A12_H <- subset(ATAC_A12_H, ATAC_A12_H$annotation %in% c("Promoter (<=1kb)", "Promoter (1-2kb)", "Promoter (2-3kb)"))
+DE_ATAC_A12_H_up <- subset(ATAC_A12_H, ATAC_A12_H$regulation == "up")
+DE_ATAC_A12_H_down <- subset(ATAC_A12_H, ATAC_A12_H$regulation == "down")
+DE_ATAC_A12_H_up_ratio <- DE_ATAC_A12_H_up[ ,c(2, 10)]
+DE_ATAC_A12_H_down_ratio <- DE_ATAC_A12_H_down[ ,c(2, 10)]
+
+DE_double_A12_H_up <- intersect(DE_RNA_A12_H_up_ratio$SYMBOL, DE_ATAC_A12_H_up_ratio$symbol)
+DE_double_A12_H_down <- intersect(DE_RNA_A12_H_down_ratio$SYMBOL, DE_ATAC_A12_H_down_ratio$symbol)
+
+#DE in at least one of the two layers
+
+DE_A12_H_up <- unique(c(DE_RNA_A12_H_up$SYMBOL, DE_ATAC_A12_H_up$symbol))
+DE_A12_H_down <- unique(c(DE_RNA_A12_H_down$SYMBOL, DE_ATAC_A12_H_down$symbol))
+
+RNA_up_commonDE_A12_H <- subset(RNA_A12_H, RNA_A12_H$log2FoldChange>=0)
+RNA_up_commonDE_A12_H <- subset(RNA_up_commonDE_A12_H, RNA_up_commonDE_A12_H$SYMBOL %in% DE_A12_H_up)
+
+RNA_down_commonDE_A12_H <- subset(RNA_A12_H, RNA_A12_H$log2FoldChange<0)
+RNA_down_commonDE_A12_H <- subset(RNA_down_commonDE_A12_H, RNA_down_commonDE_A12_H$SYMBOL %in% DE_A12_H_down)
+
+ATAC_up_commonDE_A12_H <- subset(ATAC_A12_H, ATAC_A12_H$log2FoldChange>=0)
+ATAC_up_commonDE_A12_H <- subset(ATAC_up_commonDE_A12_H, ATAC_up_commonDE_A12_H$symbol %in% DE_A12_H_up)
+
+ATAC_down_commonDE_A12_H <- subset(ATAC_A12_H, ATAC_A12_H$log2FoldChange<0)
+ATAC_down_commonDE_A12_H <- subset(ATAC_down_commonDE_A12_H, ATAC_down_commonDE_A12_H$symbol %in% DE_A12_H_down)
+
+intersect_RNAATAC_A12_H_up <- intersect(RNA_up_commonDE_A12_H$SYMBOL, ATAC_up_commonDE_A12_H$symbol)
+intersect_RNAATAC_A12_H_down <- intersect(RNA_down_commonDE_A12_H$SYMBOL, ATAC_down_commonDE_A12_H$symbol)
+
+#up 
+
+RNAup_A12_H_selected <- subset(RNA_up_commonDE_A12_H, RNA_up_commonDE_A12_H$SYMBOL %in% intersect_RNAATAC_A12_H_up)
+ATACup_A12_H_selected <- subset(ATAC_up_commonDE_A12_H, ATAC_up_commonDE_A12_H$symbol %in% intersect_RNAATAC_A12_H_up)
+ATACup_A12_H_selected <- ATACup_A12_H_selected[order(ATACup_A12_H_selected$pvalue),]
+ATACup_A12_H_selected <- distinct(ATACup_A12_H_selected, symbol, .keep_all = TRUE)
+
+RNAup_A12_H_selected <- RNAup_A12_H_selected[,c(2,9)]
+ATACup_A12_H_selected <- ATACup_A12_H_selected[,c(2,10)]
+colnames(ATACup_A12_H_selected)[1] <- "SYMBOL"
+colnames(ATACup_A12_H_selected)[2] <- "log2FC_ATAC"
+colnames(RNAup_A12_H_selected)[2] <- "log2FC_RNA"
+dataset_up_A12_H <- merge(ATACup_A12_H_selected, RNAup_A12_H_selected, by = "SYMBOL")
+
+#down
+
+RNAdown_A12_H_selected <- subset(RNA_down_commonDE_A12_H, RNA_down_commonDE_A12_H$SYMBOL %in% intersect_RNAATAC_A12_H_down)
+ATACdown_A12_H_selected <- subset(ATAC_down_commonDE_A12_H, ATAC_down_commonDE_A12_H$symbol %in% intersect_RNAATAC_A12_H_down)
+ATACdown_A12_H_selected <- ATACdown_A12_H_selected[order(ATACdown_A12_H_selected$pvalue),]
+ATACdown_A12_H_selected <- distinct(ATACdown_A12_H_selected, symbol, .keep_all = TRUE)
+
+RNAdown_A12_H_selected <- RNAdown_A12_H_selected[,c(2,9)]
+ATACdown_A12_H_selected <- ATACdown_A12_H_selected[,c(2,10)]
+colnames(ATACdown_A12_H_selected)[1] <- "SYMBOL"
+colnames(ATACdown_A12_H_selected)[2] <- "log2FC_ATAC"
+colnames(RNAdown_A12_H_selected)[2] <- "log2FC_RNA"
+dataset_down_A12_H <- merge(ATACdown_A12_H_selected, RNAdown_A12_H_selected, by = "SYMBOL")
+```
+
+### Plot results (ratio) A12 
+
+```{r}
+dataset_A12_H_pairwise <- rbind(dataset_up_A12_H, dataset_down_A12_H)
+dataset_A12_H_pairwise$sign <- ifelse(dataset_A12_H_pairwise$log2FC_RNA>=0 & dataset_A12_H_pairwise$log2FC_ATAC>=0, "up", "down")
+
+ggplot(dataset_A12_H_pairwise, aes(x=log2FC_RNA, y=log2FC_ATAC, colour=sign)) +
+  geom_point(alpha=0.2, size=3, stroke=NA) +
+  ylim(-2.5, 2.5) +
+  xlim(-2.5, 2.5) +
+  scale_colour_manual(values=c("blue", "red"))+
+  theme_bw()
+```
+
+### Perform GO enrichment
+
+```{r}
+genes_dataset_up_A12_H <- c(dataset_up_A12_H$SYMBOL)
+enr_dataset_up_A12_H <- enrichGO(gene = genes_dataset_up_A12_H,
+          OrgDb = "org.Hs.eg.db",
+          ont = "BP",
+          pAdjustMethod = "none",
+          pvalueCutoff  = 1,
+          qvalueCutoff  = 1,
+          keyType = "SYMBOL")
+  
+genes_dataset_down_A12_H <- c(dataset_down_A12_H$SYMBOL)
+enr_dataset_down_A12_H <- enrichGO(gene = genes_dataset_down_A12_H,
+          OrgDb = "org.Hs.eg.db",
+          ont = "BP",
+          pAdjustMethod = "none",
+          pvalueCutoff  = 1,
+          qvalueCutoff  = 1,
+          keyType = "SYMBOL")
+```
+
+# ATAC 6 h vs RNA 12 h (Fig. 4 supplement 2 C)
+## T 6h12h BxPC-3
+
+```{r}
+DE_double_T612_up <- intersect(DE_RNA_T12_up_ratio$SYMBOL, DE_ATAC_T6_up_ratio$symbol)
+DE_double_T612_down <- intersect(DE_RNA_T12_down_ratio$SYMBOL, DE_ATAC_T6_down_ratio$symbol)
+
+#DE in at least one of the two layers
+
+DE_T612_up <- unique(c(DE_RNA_T12_up$SYMBOL, DE_ATAC_T6_up$symbol))
+DE_T612_down <- unique(c(DE_RNA_T12_down$SYMBOL, DE_ATAC_T6_down$symbol))
+
+RNA_up_commonDE_T612 <- subset(RNA_T12, RNA_T12$log2FoldChange>=0)
+RNA_up_commonDE_T612 <- subset(RNA_up_commonDE_T612, RNA_up_commonDE_T612$SYMBOL %in% DE_T612_up)
+
+RNA_down_commonDE_T612 <- subset(RNA_T12, RNA_T12$log2FoldChange<0)
+RNA_down_commonDE_T612 <- subset(RNA_down_commonDE_T612, RNA_down_commonDE_T612$SYMBOL %in% DE_T612_down)
+
+ATAC_up_commonDE_T612 <- subset(ATAC_T6, ATAC_T6$log2FoldChange>=0)
+ATAC_up_commonDE_T612 <- subset(ATAC_up_commonDE_T612, ATAC_up_commonDE_T612$symbol %in% DE_T612_up)
+
+ATAC_down_commonDE_T612 <- subset(ATAC_T6, ATAC_T6$log2FoldChange<0)
+ATAC_down_commonDE_T612 <- subset(ATAC_down_commonDE_T612, ATAC_down_commonDE_T612$symbol %in% DE_T612_down)
+
+intersect_RNAATAC_T612_up <- intersect(RNA_up_commonDE_T612$SYMBOL, ATAC_up_commonDE_T612$symbol)
+intersect_RNAATAC_T612_down <- intersect(RNA_down_commonDE_T612$SYMBOL, ATAC_down_commonDE_T612$symbol)
+
+#up 
+
+RNAup_T612_selected <- subset(RNA_up_commonDE_T612, RNA_up_commonDE_T612$SYMBOL %in% intersect_RNAATAC_T612_up)
+ATACup_T612_selected <- subset(ATAC_up_commonDE_T612, ATAC_up_commonDE_T612$symbol %in% intersect_RNAATAC_T612_up)
+ATACup_T612_selected <- ATACup_T612_selected[order(ATACup_T612_selected$pvalue),]
+ATACup_T612_selected <- distinct(ATACup_T612_selected, symbol, .keep_all = TRUE)
+
+RNAup_T612_selected <- RNAup_T612_selected[,c(2,9)]
+ATACup_T612_selected <- ATACup_T612_selected[,c(2,10)]
+colnames(ATACup_T612_selected)[1] <- "SYMBOL"
+colnames(ATACup_T612_selected)[2] <- "log2FC_ATAC"
+colnames(RNAup_T612_selected)[2] <- "log2FC_RNA"
+dataset_up_T612 <- merge(ATACup_T612_selected, RNAup_T612_selected, by = "SYMBOL")
+
+#down
+
+RNAdown_T612_selected <- subset(RNA_down_commonDE_T612, RNA_down_commonDE_T612$SYMBOL %in% intersect_RNAATAC_T612_down)
+ATACdown_T612_selected <- subset(ATAC_down_commonDE_T612, ATAC_down_commonDE_T612$symbol %in% intersect_RNAATAC_T612_down)
+ATACdown_T612_selected <- ATACdown_T612_selected[order(ATACdown_T612_selected$pvalue),]
+ATACdown_T612_selected <- distinct(ATACdown_T612_selected, symbol, .keep_all = TRUE)
+
+RNAdown_T612_selected <- RNAdown_T612_selected[,c(2,9)]
+ATACdown_T612_selected <- ATACdown_T612_selected[,c(2,10)]
+colnames(ATACdown_T612_selected)[1] <- "SYMBOL"
+colnames(ATACdown_T612_selected)[2] <- "log2FC_ATAC"
+colnames(RNAdown_T612_selected)[2] <- "log2FC_RNA"
+dataset_down_T612 <- merge(ATACdown_T612_selected, RNAdown_T612_selected, by = "SYMBOL")
+```
+
+### Plot results (ratio) T6vs12
+
+```{r}
+dataset_T612_pairwise <- rbind(dataset_up_T612, dataset_down_T612)
+dataset_T612_pairwise$sign <- ifelse(dataset_T612_pairwise$log2FC_RNA>=0 & dataset_T612_pairwise$log2FC_ATAC>=0, "up", "down")
+
+ggplot(dataset_T612_pairwise, aes(x=log2FC_RNA, y=log2FC_ATAC, colour=sign)) +
+  geom_point(alpha=0.2, size=3, stroke=NA) +
+  ylim(-2.5, 2.5) +
+  xlim(-2.5, 2.5) +
+  scale_colour_manual(values=c("blue", "red"))+
+  theme_bw()
+```
+
+### Perform GO enrichment
+
+```{r}
+genes_dataset_up_T612 <- c(dataset_up_T612$SYMBOL)
+enr_dataset_up_T612 <- enrichGO(gene = genes_dataset_up_T612,
+          OrgDb = "org.Hs.eg.db",
+          ont = "BP",
+          pAdjustMethod = "none",
+          pvalueCutoff  = 1,
+          qvalueCutoff  = 1,
+          keyType = "SYMBOL")
+  
+genes_dataset_down_T612 <- c(dataset_down_T612$SYMBOL)
+enr_dataset_down_T612 <- enrichGO(gene = genes_dataset_down_T612,
+          OrgDb = "org.Hs.eg.db",
+          ont = "BP",
+          pAdjustMethod = "none",
+          pvalueCutoff  = 1,
+          qvalueCutoff  = 1,
+          keyType = "SYMBOL")
+```
+
+## A 6h12h BxPC-3
+
+```{r}
+DE_double_A612_up <- intersect(DE_RNA_A12_up_ratio$SYMBOL, DE_ATAC_A6_up_ratio$symbol)
+DE_double_A612_down <- intersect(DE_RNA_A12_down_ratio$SYMBOL, DE_ATAC_A6_down_ratio$symbol)
+
+#DE in at least one of the two layers
+
+DE_A612_up <- unique(c(DE_RNA_A12_up$SYMBOL, DE_ATAC_A6_up$symbol))
+DE_A612_down <- unique(c(DE_RNA_A12_down$SYMBOL, DE_ATAC_A6_down$symbol))
+
+RNA_up_commonDE_A612 <- subset(RNA_A12, RNA_A12$log2FoldChange>=0)
+RNA_up_commonDE_A612 <- subset(RNA_up_commonDE_A612, RNA_up_commonDE_A612$SYMBOL %in% DE_A612_up)
+
+RNA_down_commonDE_A612 <- subset(RNA_A12, RNA_A12$log2FoldChange<0)
+RNA_down_commonDE_A612 <- subset(RNA_down_commonDE_A612, RNA_down_commonDE_A612$SYMBOL %in% DE_A612_down)
+
+ATAC_up_commonDE_A612 <- subset(ATAC_A6, ATAC_A6$log2FoldChange>=0)
+ATAC_up_commonDE_A612 <- subset(ATAC_up_commonDE_A612, ATAC_up_commonDE_A612$symbol %in% DE_A612_up)
+
+ATAC_down_commonDE_A612 <- subset(ATAC_A6, ATAC_A6$log2FoldChange<0)
+ATAC_down_commonDE_A612 <- subset(ATAC_down_commonDE_A612, ATAC_down_commonDE_A612$symbol %in% DE_A612_down)
+
+intersect_RNAATAC_A612_up <- intersect(RNA_up_commonDE_A612$SYMBOL, ATAC_up_commonDE_A612$symbol)
+intersect_RNAATAC_A612_down <- intersect(RNA_down_commonDE_A612$SYMBOL, ATAC_down_commonDE_A612$symbol)
+
+#up 
+
+RNAup_A612_selected <- subset(RNA_up_commonDE_A612, RNA_up_commonDE_A612$SYMBOL %in% intersect_RNAATAC_A612_up)
+ATACup_A612_selected <- subset(ATAC_up_commonDE_A612, ATAC_up_commonDE_A612$symbol %in% intersect_RNAATAC_A612_up)
+ATACup_A612_selected <- ATACup_A612_selected[order(ATACup_A612_selected$pvalue),]
+ATACup_A612_selected <- distinct(ATACup_A612_selected, symbol, .keep_all = TRUE)
+
+RNAup_A612_selected <- RNAup_A612_selected[,c(2,9)]
+ATACup_A612_selected <- ATACup_A612_selected[,c(2,10)]
+colnames(ATACup_A612_selected)[1] <- "SYMBOL"
+colnames(ATACup_A612_selected)[2] <- "log2FC_ATAC"
+colnames(RNAup_A612_selected)[2] <- "log2FC_RNA"
+dataset_up_A612 <- merge(ATACup_A612_selected, RNAup_A612_selected, by = "SYMBOL")
+
+#down
+
+RNAdown_A612_selected <- subset(RNA_down_commonDE_A612, RNA_down_commonDE_A612$SYMBOL %in% intersect_RNAATAC_A612_down)
+ATACdown_A612_selected <- subset(ATAC_down_commonDE_A612, ATAC_down_commonDE_A612$symbol %in% intersect_RNAATAC_A612_down)
+ATACdown_A612_selected <- ATACdown_A612_selected[order(ATACdown_A612_selected$pvalue),]
+ATACdown_A612_selected <- distinct(ATACdown_A612_selected, symbol, .keep_all = TRUE)
+
+RNAdown_A612_selected <- RNAdown_A612_selected[,c(2,9)]
+ATACdown_A612_selected <- ATACdown_A612_selected[,c(2,10)]
+colnames(ATACdown_A612_selected)[1] <- "SYMBOL"
+colnames(ATACdown_A612_selected)[2] <- "log2FC_ATAC"
+colnames(RNAdown_A612_selected)[2] <- "log2FC_RNA"
+dataset_down_A612 <- merge(ATACdown_A612_selected, RNAdown_A612_selected, by = "SYMBOL")
+```
+
+### Plot results (ratio) A6vs12
+
+```{r}
+dataset_A612_pairwise <- rbind(dataset_up_A612, dataset_down_A612)
+dataset_A612_pairwise$sign <- ifelse(dataset_A612_pairwise$log2FC_RNA>=0 & dataset_A612_pairwise$log2FC_ATAC>=0, "up", "down")
+
+ggplot(dataset_A612_pairwise, aes(x=log2FC_RNA, y=log2FC_ATAC, colour=sign)) +
+  geom_point(alpha=0.2, size=3, stroke=NA) +
+  ylim(-2.5, 2.5) +
+  xlim(-2.5, 2.5) +
+  scale_colour_manual(values=c("blue", "red"))+
+  theme_bw()
+```
+
+### Perform GO enrichment
+
+```{r}
+genes_dataset_up_A612 <- c(dataset_up_A612$SYMBOL)
+enr_dataset_up_A612 <- enrichGO(gene = genes_dataset_up_A612,
+          OrgDb = "org.Hs.eg.db",
+          ont = "BP",
+          pAdjustMethod = "none",
+          pvalueCutoff  = 1,
+          qvalueCutoff  = 1,
+          keyType = "SYMBOL")
+  
+genes_dataset_down_A612 <- c(dataset_down_A612$SYMBOL)
+enr_dataset_down_A612 <- enrichGO(gene = genes_dataset_down_A612,
+          OrgDb = "org.Hs.eg.db",
+          ont = "BP",
+          pAdjustMethod = "none",
+          pvalueCutoff  = 1,
+          qvalueCutoff  = 1,
+          keyType = "SYMBOL")
+```
+
+## T 6h12h HCT-15
+
+```{r}
+DE_double_T612_H_up <- intersect(DE_RNA_T12_H_up_ratio$SYMBOL, DE_ATAC_T6_H_up_ratio$symbol)
+DE_double_T612_H_down <- intersect(DE_RNA_T12_H_down_ratio$SYMBOL, DE_ATAC_T6_H_down_ratio$symbol)
+
+#DE in at least one of the two layers
+
+DE_T612_H_up <- unique(c(DE_RNA_T12_H_up$SYMBOL, DE_ATAC_T6_H_up$symbol))
+DE_T612_H_down <- unique(c(DE_RNA_T12_H_down$SYMBOL, DE_ATAC_T6_H_down$symbol))
+
+RNA_up_commonDE_T612_H <- subset(RNA_T12_H, RNA_T12_H$log2FoldChange>=0)
+RNA_up_commonDE_T612_H <- subset(RNA_up_commonDE_T612_H, RNA_up_commonDE_T612_H$SYMBOL %in% DE_T612_H_up)
+
+RNA_down_commonDE_T612_H <- subset(RNA_T12_H, RNA_T12_H$log2FoldChange<0)
+RNA_down_commonDE_T612_H <- subset(RNA_down_commonDE_T612_H, RNA_down_commonDE_T612_H$SYMBOL %in% DE_T612_H_down)
+
+ATAC_up_commonDE_T612_H <- subset(ATAC_T6_H, ATAC_T6_H$log2FoldChange>=0)
+ATAC_up_commonDE_T612_H <- subset(ATAC_up_commonDE_T612_H, ATAC_up_commonDE_T612_H$symbol %in% DE_T612_H_up)
+
+ATAC_down_commonDE_T612_H <- subset(ATAC_T6_H, ATAC_T6_H$log2FoldChange<0)
+ATAC_down_commonDE_T612_H <- subset(ATAC_down_commonDE_T612_H, ATAC_down_commonDE_T612_H$symbol %in% DE_T612_H_down)
+
+intersect_RNAATAC_T612_H_up <- intersect(RNA_up_commonDE_T612_H$SYMBOL, ATAC_up_commonDE_T612_H$symbol)
+intersect_RNAATAC_T612_H_down <- intersect(RNA_down_commonDE_T612_H$SYMBOL, ATAC_down_commonDE_T612_H$symbol)
+
+#up 
+
+RNAup_T612_H_selected <- subset(RNA_up_commonDE_T612_H, RNA_up_commonDE_T612_H$SYMBOL %in% intersect_RNAATAC_T612_H_up)
+ATACup_T612_H_selected <- subset(ATAC_up_commonDE_T612_H, ATAC_up_commonDE_T612_H$symbol %in% intersect_RNAATAC_T612_H_up)
+ATACup_T612_H_selected <- ATACup_T612_H_selected[order(ATACup_T612_H_selected$pvalue),]
+ATACup_T612_H_selected <- distinct(ATACup_T612_H_selected, symbol, .keep_all = TRUE)
+
+RNAup_T612_H_selected <- RNAup_T612_H_selected[,c(2,9)]
+ATACup_T612_H_selected <- ATACup_T612_H_selected[,c(2,10)]
+colnames(ATACup_T612_H_selected)[1] <- "SYMBOL"
+colnames(ATACup_T612_H_selected)[2] <- "log2FC_ATAC"
+colnames(RNAup_T612_H_selected)[2] <- "log2FC_RNA"
+dataset_up_T612_H <- merge(ATACup_T612_H_selected, RNAup_T612_H_selected, by = "SYMBOL")
+
+#down
+
+RNAdown_T612_H_selected <- subset(RNA_down_commonDE_T612_H, RNA_down_commonDE_T612_H$SYMBOL %in% intersect_RNAATAC_T612_H_down)
+ATACdown_T612_H_selected <- subset(ATAC_down_commonDE_T612_H, ATAC_down_commonDE_T612_H$symbol %in% intersect_RNAATAC_T612_H_down)
+ATACdown_T612_H_selected <- ATACdown_T612_H_selected[order(ATACdown_T612_H_selected$pvalue),]
+ATACdown_T612_H_selected <- distinct(ATACdown_T612_H_selected, symbol, .keep_all = TRUE)
+
+RNAdown_T612_H_selected <- RNAdown_T612_H_selected[,c(2,9)]
+ATACdown_T612_H_selected <- ATACdown_T612_H_selected[,c(2,10)]
+colnames(ATACdown_T612_H_selected)[1] <- "SYMBOL"
+colnames(ATACdown_T612_H_selected)[2] <- "log2FC_ATAC"
+colnames(RNAdown_T612_H_selected)[2] <- "log2FC_RNA"
+dataset_down_T612_H <- merge(ATACdown_T612_H_selected, RNAdown_T612_H_selected, by = "SYMBOL")
+```
+
+### Plot results (ratio) T6vs12
+
+```{r}
+dataset_T612_H_pairwise <- rbind(dataset_up_T612_H, dataset_down_T612_H)
+dataset_T612_H_pairwise$sign <- ifelse(dataset_T612_H_pairwise$log2FC_RNA>=0 & dataset_T612_H_pairwise$log2FC_ATAC>=0, "up", "down")
+
+ggplot(dataset_T612_H_pairwise, aes(x=log2FC_RNA, y=log2FC_ATAC, colour=sign)) +
+  geom_point(alpha=0.2, size=3, stroke=NA) +
+  ylim(-2.5, 2.5) +
+  xlim(-2.5, 2.5) +
+  scale_colour_manual(values=c("blue", "red"))+
+  theme_bw()
+```
+
+
+### Perform GO enrichment
+
+```{r}
+genes_dataset_up_T612_H <- c(dataset_up_T612_H$SYMBOL)
+enr_dataset_up_T612_H <- enrichGO(gene = genes_dataset_up_T612_H,
+          OrgDb = "org.Hs.eg.db",
+          ont = "BP",
+          pAdjustMethod = "none",
+          pvalueCutoff  = 1,
+          qvalueCutoff  = 1,
+          keyType = "SYMBOL")
+  
+genes_dataset_down_T612_H <- c(dataset_down_T612_H$SYMBOL)
+enr_dataset_down_T612_H <- enrichGO(gene = genes_dataset_down_T612_H,
+          OrgDb = "org.Hs.eg.db",
+          ont = "BP",
+          pAdjustMethod = "none",
+          pvalueCutoff  = 1,
+          qvalueCutoff  = 1,
+          keyType = "SYMBOL")
+```
+
+## A 6h12h HCT-15
+
+```{r}
+DE_double_A612_H_up <- intersect(DE_RNA_A12_H_up_ratio$SYMBOL, DE_ATAC_A6_H_up_ratio$symbol)
+DE_double_A612_H_down <- intersect(DE_RNA_A12_H_down_ratio$SYMBOL, DE_ATAC_A6_H_down_ratio$symbol)
+
+#DE in at least one of the two layers
+
+DE_A612_H_up <- unique(c(DE_RNA_A12_H_up$SYMBOL, DE_ATAC_A6_H_up$symbol))
+DE_A612_H_down <- unique(c(DE_RNA_A12_H_down$SYMBOL, DE_ATAC_A6_H_down$symbol))
+
+RNA_up_commonDE_A612_H <- subset(RNA_A12_H, RNA_A12_H$log2FoldChange>=0)
+RNA_up_commonDE_A612_H <- subset(RNA_up_commonDE_A612_H, RNA_up_commonDE_A612_H$SYMBOL %in% DE_A612_H_up)
+
+RNA_down_commonDE_A612_H <- subset(RNA_A12_H, RNA_A12_H$log2FoldChange<0)
+RNA_down_commonDE_A612_H <- subset(RNA_down_commonDE_A612_H, RNA_down_commonDE_A612_H$SYMBOL %in% DE_A612_H_down)
+
+ATAC_up_commonDE_A612_H <- subset(ATAC_A6_H, ATAC_A6_H$log2FoldChange>=0)
+ATAC_up_commonDE_A612_H <- subset(ATAC_up_commonDE_A612_H, ATAC_up_commonDE_A612_H$symbol %in% DE_A612_H_up)
+
+ATAC_down_commonDE_A612_H <- subset(ATAC_A6_H, ATAC_A6_H$log2FoldChange<0)
+ATAC_down_commonDE_A612_H <- subset(ATAC_down_commonDE_A612_H, ATAC_down_commonDE_A612_H$symbol %in% DE_A612_H_down)
+
+intersect_RNAATAC_A612_H_up <- intersect(RNA_up_commonDE_A612_H$SYMBOL, ATAC_up_commonDE_A612_H$symbol)
+intersect_RNAATAC_A612_H_down <- intersect(RNA_down_commonDE_A612_H$SYMBOL, ATAC_down_commonDE_A612_H$symbol)
+
+#up 
+
+RNAup_A612_H_selected <- subset(RNA_up_commonDE_A612_H, RNA_up_commonDE_A612_H$SYMBOL %in% intersect_RNAATAC_A612_H_up)
+ATACup_A612_H_selected <- subset(ATAC_up_commonDE_A612_H, ATAC_up_commonDE_A612_H$symbol %in% intersect_RNAATAC_A612_H_up)
+ATACup_A612_H_selected <- ATACup_A612_H_selected[order(ATACup_A612_H_selected$pvalue),]
+ATACup_A612_H_selected <- distinct(ATACup_A612_H_selected, symbol, .keep_all = TRUE)
+
+RNAup_A612_H_selected <- RNAup_A612_H_selected[,c(2,9)]
+ATACup_A612_H_selected <- ATACup_A612_H_selected[,c(2,10)]
+colnames(ATACup_A612_H_selected)[1] <- "SYMBOL"
+colnames(ATACup_A612_H_selected)[2] <- "log2FC_ATAC"
+colnames(RNAup_A612_H_selected)[2] <- "log2FC_RNA"
+dataset_up_A612_H <- merge(ATACup_A612_H_selected, RNAup_A612_H_selected, by = "SYMBOL")
+
+#down
+
+RNAdown_A612_H_selected <- subset(RNA_down_commonDE_A612_H, RNA_down_commonDE_A612_H$SYMBOL %in% intersect_RNAATAC_A612_H_down)
+ATACdown_A612_H_selected <- subset(ATAC_down_commonDE_A612_H, ATAC_down_commonDE_A612_H$symbol %in% intersect_RNAATAC_A612_H_down)
+ATACdown_A612_H_selected <- ATACdown_A612_H_selected[order(ATACdown_A612_H_selected$pvalue),]
+ATACdown_A612_H_selected <- distinct(ATACdown_A612_H_selected, symbol, .keep_all = TRUE)
+
+RNAdown_A612_H_selected <- RNAdown_A612_H_selected[,c(2,9)]
+ATACdown_A612_H_selected <- ATACdown_A612_H_selected[,c(2,10)]
+colnames(ATACdown_A612_H_selected)[1] <- "SYMBOL"
+colnames(ATACdown_A612_H_selected)[2] <- "log2FC_ATAC"
+colnames(RNAdown_A612_H_selected)[2] <- "log2FC_RNA"
+dataset_down_A612_H <- merge(ATACdown_A612_H_selected, RNAdown_A612_H_selected, by = "SYMBOL")
+```
+
+### Plot results (ratio) A6vs12
+
+```{r}
+dataset_A612_H_pairwise <- rbind(dataset_up_A612_H, dataset_down_A612_H)
+dataset_A612_H_pairwise$sign <- ifelse(dataset_A612_H_pairwise$log2FC_RNA>=0 & dataset_A612_H_pairwise$log2FC_ATAC>=0, "up", "down")
+
+ggplot(dataset_A612_H_pairwise, aes(x=log2FC_RNA, y=log2FC_ATAC, colour=sign)) +
+  geom_point(alpha=0.2, size=3, stroke=NA) +
+  ylim(-2.5, 2.5) +
+  xlim(-2.5, 2.5) +
+  scale_colour_manual(values=c("blue", "red"))+
+  theme_bw()
+```
+
+### Perform GO enrichment
+
+```{r}
+genes_dataset_up_A612_H <- c(dataset_up_A612_H$SYMBOL)
+enr_dataset_up_A612_H <- enrichGO(gene = genes_dataset_up_A612_H,
+          OrgDb = "org.Hs.eg.db",
+          ont = "BP",
+          pAdjustMethod = "none",
+          pvalueCutoff  = 1,
+          qvalueCutoff  = 1,
+          keyType = "SYMBOL")
+  
+genes_dataset_down_A612_H <- c(dataset_down_A612_H$SYMBOL)
+enr_dataset_down_A612_H <- enrichGO(gene = genes_dataset_down_A612_H,
+          OrgDb = "org.Hs.eg.db",
+          ont = "BP",
+          pAdjustMethod = "none",
+          pvalueCutoff  = 1,
+          qvalueCutoff  = 1,
+          keyType = "SYMBOL")
+```
+
+# Session information
+
+```{r}
+session_info <- sessionInfo()
+session_info
+```
+
